@@ -44,6 +44,9 @@ services:
       - ${HOME}/.gitconfig:/home/${USER:-developer}/.gitconfig:ro
       - ${HOME}/.netrc:/home/${USER:-developer}/.netrc:ro
 
+      # Claude Code config (shared with host)
+      - ${HOME}/.claude:/home/${USER:-developer}/.claude:cached
+
       # X11 / GUI forwarding
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
 
