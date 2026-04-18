@@ -1,8 +1,10 @@
 # =============================================================================
-# Python packages — Base development tools
-# Installed into /opt/venv inside the container.
+# Extra Python packages installed into Isaac Sim's Python environment.
+# Install path: /isaac-sim/python.sh -m pip install -r requirements.txt
 #
-# Add project-specific dependencies below the base tools section.
+# NOTE: Do NOT add packages that conflict with Isaac Sim's pre-installed deps
+#       (numpy, torch, omni.*, pxr, etc.).  Check with:
+#         /isaac-sim/python.sh -m pip list
 # =============================================================================
 
 # --- Development / debugging ---
