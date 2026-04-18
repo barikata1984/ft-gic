@@ -47,8 +47,9 @@ for d in "${TARGET_HOME}/.cache" "${TARGET_HOME}/.local" "${TARGET_HOME}/.config
     chown "${TARGET_USER}:${TARGET_GROUP}" "$d" 2>/dev/null || true
 done
 
-# ---- Transfer venv ownership to runtime user --------------------------------
+# ---- Transfer venv and pip-cache ownership to runtime user -----------------
 chown -R "${TARGET_USER}:${TARGET_GROUP}" "${VIRTUAL_ENV}"
+chown -R "${TARGET_USER}:${TARGET_GROUP}" "${TARGET_HOME}/.cache/pip" 2>/dev/null || true
 
 # ---- Install project in editable mode (if pyproject.toml exists) ------------
 if [ -f /workspace/pyproject.toml ]; then
