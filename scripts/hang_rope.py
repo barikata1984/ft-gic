@@ -93,6 +93,17 @@ def _build_parser() -> argparse.ArgumentParser:
     motion.add_argument("--circle-period", type=float, default=3.0, metavar="S",
                         help="Time for one full revolution [s]")
 
+    # ── geometry / initial condition ──────────────────────────────────────────
+    geom = p.add_argument_group("geometry")
+    geom.add_argument("--horizontal", action="store_true", default=False,
+                      help="Build rope horizontally along +X (cantilever test)")
+    geom.add_argument("--tip-offset-x", type=float, default=0.0, metavar="M",
+                      help="After reset, nudge tip segment by this Δx for perturbation tests")
+    geom.add_argument("--log-every", type=int, default=60, metavar="N",
+                      help="Log summary state every N steps")
+    geom.add_argument("--tip-trace", action="store_true", default=False,
+                      help="Log tip position every step (for oscillation/period analysis)")
+
     return p
 
 
@@ -167,11 +178,29 @@ def main() -> None:
         anchor_height=args.anchor_height,
         joint_stiffness=k_bend,
         joint_damping=c_damp,
+        horizontal=args.horizontal,
     )
     builder = RopeBuilder(cfg, stage)
     builder.build()
 
     world.reset()
+
+    # Apply a small lateral offset to the tip segment for perturbation tests.
+    if abs(args.tip_offset_x) > 0.0:
+        from pxr import Gf, UsdGeom
+        tip_prim = builder.segment_prims[-1]
+        xform_ops = UsdGeom.Xformable(tip_prim).GetOrderedXformOps()
+        translate_op = next(
+            op for op in xform_ops if op.GetOpType() == UsdGeom.XformOp.TypeTranslate
+        )
+        current = translate_op.Get()
+        translate_op.Set(
+            Gf.Vec3d(current[0] + args.tip_offset_x, current[1], current[2])
+        )
+        carb.log_warn(
+            f"[rope] tip offset applied: Δx={args.tip_offset_x:+.4f} m "
+            f"(tip now at {translate_op.Get()})"
+        )
 
     _run(simulation_app, world, builder, args)
 
@@ -285,13 +314,22 @@ def _run(simulation_app, world, builder, args) -> None:
                 f"T=({T[0]:+.3f}, {T[1]:+.3f}, {T[2]:+.3f}) Nm [expect≈0]"
             )
 
+    def _log_tip(elapsed: float) -> None:
+        p = _tip_pos()
+        carb.log_warn(
+            f"[tip] t={elapsed:.6f}  x={p[0]:+.6f}  y={p[1]:+.6f}  z={p[2]:+.6f}"
+        )
+
+    log_every = max(1, args.log_every)
     if args.headless:
         num_steps = int(args.duration / args.dt)
         carb.log_warn(f"[rope] running {num_steps} steps ({args.duration:.1f}s) headless")
         for step in range(num_steps):
             _update_anchor(step * args.dt)
             world.step(render=False)
-            if step % 60 == 0:
+            if args.tip_trace:
+                _log_tip(step * args.dt)
+            if step % log_every == 0:
                 _log_state(step * args.dt)
 
         _log_state(num_steps * args.dt)
@@ -301,7 +339,9 @@ def _run(simulation_app, world, builder, args) -> None:
         while simulation_app.is_running():
             _update_anchor(step * args.dt)
             world.step(render=True)
-            if step % 60 == 0:
+            if args.tip_trace:
+                _log_tip(step * args.dt)
+            if step % log_every == 0:
                 _log_state(step * args.dt)
             step += 1
 
