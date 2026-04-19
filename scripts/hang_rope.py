@@ -115,6 +115,8 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Log summary state every N steps")
     geom.add_argument("--tip-trace", action="store_true", default=False,
                       help="Log tip position every step (for oscillation/period analysis)")
+    geom.add_argument("--segment-csv", type=str, default="", metavar="PATH",
+                      help="Write all segment positions (t, seg, x, y, z) to CSV")
 
     return p
 
@@ -199,6 +201,20 @@ def main() -> None:
     builder = RopeBuilder(cfg, stage)
     builder.build()
 
+    # Shift all segments so initial position matches the t=0 circle point (R, 0, z).
+    # Without this, the first physics step teleports seg0 by R=circle_radius, sending
+    # a shock through the rope that causes large transient oscillations.
+    if args.circle_radius > 0.0 and not args.horizontal:
+        from pxr import Gf, UsdGeom as _UG
+        x0 = args.circle_radius  # cos(0) = 1
+        for prim in builder.segment_prims:
+            t_op = next(
+                op for op in _UG.Xformable(prim).GetOrderedXformOps()
+                if op.GetOpType() == _UG.XformOp.TypeTranslate
+            )
+            cur = t_op.Get()
+            t_op.Set(Gf.Vec3d(cur[0] + x0, cur[1], cur[2]))
+
     world.reset()
 
     # Apply a small lateral offset to the tip segment for perturbation tests.
@@ -224,31 +240,42 @@ def main() -> None:
 
 
 def _run(simulation_app, world, builder, args) -> None:
+    import csv
     import math
 
     import carb
     import numpy as np
-    from pxr import Gf, UsdGeom
+    from omni.isaac.core.prims import RigidPrimView
 
-    tip_prim = builder.segment_prims[-1]
     seg_mass = args.rope_mass / args.segments
     seg_length = args.rope_length / args.segments
 
-    def _tip_pos():
-        # 毎回新規 XformCache を生成してステール読み取りを防ぐ
-        return UsdGeom.XformCache().GetLocalToWorldTransform(tip_prim).ExtractTranslation()
+    # RigidPrimViews give direct PhysX reads/writes — avoids the USD stale-read
+    # problem that occurs when render=False skips the PhysX→USD sync.
+    seg_paths = [prim.GetPath().pathString for prim in builder.segment_prims]
+    all_segs_view = RigidPrimView(prim_paths_expr=seg_paths, reset_xform_properties=False)
+    all_segs_view.initialize()
+
+    def _get_all_positions() -> np.ndarray:
+        pos, _ = all_segs_view.get_world_poses(usd=False)
+        return pos  # (n_segs, 3) float32, directly from PhysX
+
+    def _tip_pos() -> np.ndarray:
+        return _get_all_positions()[-1]
 
     # Anchor circular motion setup
     circle = args.circle_radius > 0.0
     omega = 0.0
+    anchor_center_z = args.anchor_height - seg_length / 2.0
+    anchor_view = None
+
     if circle:
-        anchor_prim = builder.segment_prims[0]
-        anchor_translate_op = next(
-            op for op in UsdGeom.Xformable(anchor_prim).GetOrderedXformOps()
-            if op.GetOpType() == UsdGeom.XformOp.TypeTranslate
-        )
+        # Separate view for seg0 so we can set its kinematic target each step.
+        # set_world_poses(usd=False) writes directly to the PhysX kinematic target,
+        # which gives PhysX velocity information (no infinite-velocity teleport).
+        anchor_view = RigidPrimView(prim_paths_expr=seg_paths[0], reset_xform_properties=False)
+        anchor_view.initialize()
         omega = 2.0 * math.pi / args.circle_period
-        anchor_center_z = args.anchor_height - seg_length / 2.0
         carb.log_warn(
             f"[rope] circular anchor: R={args.circle_radius}m, T={args.circle_period}s, "
             f"omega={omega:.3f} rad/s"
@@ -259,7 +286,10 @@ def _run(simulation_app, world, builder, args) -> None:
             return
         x = args.circle_radius * math.cos(omega * t)
         y = args.circle_radius * math.sin(omega * t)
-        anchor_translate_op.Set(Gf.Vec3d(x, y, anchor_center_z))
+        anchor_view.set_world_poses(
+            positions=np.array([[x, y, anchor_center_z]], dtype=np.float32),
+            usd=True,
+        )
 
     def _compute_anchor_wrench() -> tuple[np.ndarray, np.ndarray]:
         """Compute anchor reaction force & torque analytically (Newton's 2nd law).
@@ -272,27 +302,18 @@ def _run(simulation_app, world, builder, args) -> None:
 
         The anchor joint is at the bottom of Segment_000 (= top of Segment_001).
         """
-        cache = UsdGeom.XformCache()
+        positions = _get_all_positions()  # (n_segs, 3), from PhysX directly
+        joint_pos = positions[0] + np.array([0.0, 0.0, -seg_length / 2.0])
 
-        # Anchor joint position: bottom endpoint of Segment_000
-        p0 = np.array(cache.GetLocalToWorldTransform(builder.segment_prims[0]).ExtractTranslation())
-        joint_pos = p0 + np.array([0.0, 0.0, -seg_length / 2.0])
-
-        F = np.array([0.0, 0.0, args.rope_mass * _G])  # gravity term always present
+        F = np.array([0.0, 0.0, args.rope_mass * _G])
         T = np.zeros(3)
 
-        for seg_prim in builder.segment_prims:
-            p = np.array(cache.GetLocalToWorldTransform(seg_prim).ExtractTranslation())
-            r = p - joint_pos  # vector from anchor joint to segment center
-
+        for p in positions:
+            r = p - joint_pos
             if circle:
-                # Centripetal acceleration (toward rotation axis)
                 a = np.array([-omega**2 * p[0], -omega**2 * p[1], 0.0])
                 F += seg_mass * a
-                # Torque from centripetal: r × (m * a)
                 T += np.cross(r, seg_mass * a)
-
-            # Torque from gravity (anchor must balance): r × (m * g upward)
             T += np.cross(r, np.array([0.0, 0.0, seg_mass * _G]))
 
         return F, T
@@ -336,30 +357,54 @@ def _run(simulation_app, world, builder, args) -> None:
             f"[tip] t={elapsed:.6f}  x={p[0]:+.6f}  y={p[1]:+.6f}  z={p[2]:+.6f}"
         )
 
-    log_every = max(1, args.log_every)
-    if args.headless:
-        num_steps = int(args.duration / args.dt)
-        carb.log_warn(f"[rope] running {num_steps} steps ({args.duration:.1f}s) headless")
-        for step in range(num_steps):
-            _update_anchor(step * args.dt)
-            world.step(render=False)
-            if args.tip_trace:
-                _log_tip(step * args.dt)
-            if step % log_every == 0:
-                _log_state(step * args.dt)
+    # CSV recording setup
+    _csv_file = None
+    _csv_writer = None
+    if args.segment_csv:
+        _csv_file = open(args.segment_csv, "w", newline="")
+        _csv_writer = csv.writer(_csv_file)
+        _csv_writer.writerow(["t", "seg", "x", "y", "z"])
+        carb.log_warn(f"[rope] recording segment positions to {args.segment_csv}")
 
-        _log_state(num_steps * args.dt)
-    else:
-        carb.log_warn("[rope] running with GUI — close the window to exit")
-        step = 0
-        while simulation_app.is_running():
-            _update_anchor(step * args.dt)
-            world.step(render=True)
-            if args.tip_trace:
-                _log_tip(step * args.dt)
-            if step % log_every == 0:
-                _log_state(step * args.dt)
-            step += 1
+    def _record_segments(t: float) -> None:
+        if _csv_writer is None:
+            return
+        positions = _get_all_positions()
+        for idx, p in enumerate(positions):
+            _csv_writer.writerow([f"{t:.6f}", idx, f"{p[0]:.6f}", f"{p[1]:.6f}", f"{p[2]:.6f}"])
+
+    log_every = max(1, args.log_every)
+    try:
+        if args.headless:
+            num_steps = int(args.duration / args.dt)
+            carb.log_warn(f"[rope] running {num_steps} steps ({args.duration:.1f}s) headless")
+            for step in range(num_steps):
+                _update_anchor(step * args.dt)
+                world.step(render=False)
+                if args.tip_trace:
+                    _log_tip(step * args.dt)
+                if step % log_every == 0:
+                    _log_state(step * args.dt)
+                    _record_segments(step * args.dt)
+
+            _log_state(num_steps * args.dt)
+            _record_segments(num_steps * args.dt)
+        else:
+            carb.log_warn("[rope] running with GUI — close the window to exit")
+            step = 0
+            while simulation_app.is_running():
+                _update_anchor(step * args.dt)
+                world.step(render=True)
+                if args.tip_trace:
+                    _log_tip(step * args.dt)
+                if step % log_every == 0:
+                    _log_state(step * args.dt)
+                    _record_segments(step * args.dt)
+                step += 1
+    finally:
+        if _csv_file is not None:
+            _csv_file.close()
+            carb.log_warn(f"[rope] segment CSV closed: {args.segment_csv}")
 
 
 if __name__ == "__main__":

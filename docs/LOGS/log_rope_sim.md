@@ -144,3 +144,36 @@ float physics:damping ... If angular drive: mass*DIST_UNITS*DIST_UNITS/second/de
 ### 残課題
 - 大振幅 (|θ| > 20°) では小振幅解析値から 10〜20% 外れる。大変形の非線形性
   (束縛制約と遠心項) によるもので、バネ剛性そのものは正しい。
+
+---
+
+## 2026-04-19 — セグメント位置 CSV・PhysX 直接 API・kinematic body 円運動
+
+### 作業内容
+
+#### セグメント位置記録 (`--segment-csv`)
+`hang_rope.py` に `--segment-csv PATH` オプションを追加。`_record_segments(t)` が全セグメントの (t, seg, x, y, z) を CSV に書き出す。`scripts/analyze_segments.py` を新規作成し、以下を出力:
+- アンカー XY 軌跡（期待円 vs 実測、`err_r`）
+- 各セグメントの mean XY 半径・Z（最後 3 s の定常状態推定）
+- 最終スナップショット時のロープ形状
+
+#### USD ステール読み取りバグの発見と修正
+
+**バグ:** headless モード (`render=False`) では PhysX→USD 同期が行われないため、`UsdGeom.XformCache()` で読み取ると PhysX の計算結果ではなく直前に書いた USD 値を返す。旧 CSV で `err_r=0.0000` が出ていたのはこれが原因（自分が書いた値を自分で読んでいた）。
+
+**修正:** `_record_segments`・`_tip_pos`・`_compute_anchor_wrench` の全 USD 読み取りを `RigidPrimView.get_world_poses(usd=False)` に置き換え、PhysX から直接取得するようにした。
+
+#### 初期ジャンプの修正
+`build()` では Segment_000 を `(0,0,z)` に配置するが、`_run()` 開始直後の `_update_anchor(t=0)` が `(R,0,z)` に設定するため 0.1m のテレポートが発生し、constraint 爆発でロープが暴れる。`world.reset()` 前に全セグメントを `(R,0,0)` オフセットすることで解消。
+
+#### kinematic body 円運動 → 未解決
+
+`anchor_translate_op.Set()` (USD XformOp 直書き) → `RigidPrimView.set_world_poses(usd=True/False)` に切り替えたが、**GUI レンダラーでは依然としてアンカーが静止したまま**。
+
+headless の `get_world_poses(usd=False)` が返す値は err_r=0.0000 だが、これはキネマティックターゲット値（書いた値）を読み返しているだけの可能性が高い。PhysX が実際にボディを動かしているかは未確認。
+
+### 残課題
+- kinematic body の位置を PhysX で実際に更新し、レンダラーにも反映させる方法の調査
+  - `omni.physx.get_physx_simulation_interface().set_kinematic_target()` 直接呼び出し
+  - または dynamic body + velocity 制御への切り替え
+- 定常状態での |Fxy| 収束確認（30 s 以上）
