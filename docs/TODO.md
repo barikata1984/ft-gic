@@ -27,6 +27,7 @@
 - [x] アンカー円運動モード実装（`--circle-radius`, `--circle-period`）
 - [x] アンカー反力・トルクの解析的ログ出力実装（Newton の第二法則）
 - [x] 重力・遠心力を考慮した妥当性検証（headless 実行で確認）
+- [x] D6 DriveAPI 剛性のキャリブレーション（USD 角度単位が deg のため π/180 変換を追加）
 - [ ] コンテナリビルド（Dockerfile の `/isaac-sim/kit/` chown 修正を適用）
 - [ ] リビルド後のキャッシュエラー解消・アセットダウンロード確認
 - [ ] 円運動の定常状態検証（duration 30s 以上での |Fxy| 収束確認）

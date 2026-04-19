@@ -27,28 +27,37 @@ def _compute_joint_drive(
 ) -> tuple[float, float]:
     """Compute D6 joint drive stiffness and damping for a solid circular DLO.
 
-    Uses Euler-Bernoulli beam theory: k_bend = E * I / L_seg
-    No empirical scale factor — valid for a single solid homogeneous rod.
+    Uses Euler-Bernoulli beam theory: k_bend = E · I / L_seg (SI, N·m/rad).
+
+    The USD PhysX DriveAPI for angular drives is documented to measure angle
+    in DEGREES (see PhysicsDriveAPI schema: "stiffness … mass·DIST²/degrees/s²",
+    "targetPosition … if angular drive: degrees"). Empirically a single D6
+    drive with stiffness attr S produces a restoring torque τ = S·(180/π)·θ
+    for θ in radians, i.e. the effective SI stiffness is S · 180/π. To get an
+    SI-correct k_bend we therefore must write   stiffness_attr = k_bend · π/180.
+    The same conversion applies to the damping coefficient.
     """
     r = rope_diameter / 2.0
     seg_len = rope_length / segments
     m_seg = rope_mass / segments
 
     I = math.pi * r**4 / 4.0          # 2nd moment of area [m⁴]
-    k_bend = youngs_modulus * I / seg_len  # bending stiffness [N·m/rad]
+    k_bend = youngs_modulus * I / seg_len  # SI bending stiffness [N·m/rad]
 
-    I_rot = m_seg * r**2               # rotational inertia approx [kg·m²]
+    # Rotational inertia of a segment swinging about its joint endpoint:
+    # uniform rod about end, I = m · L_seg² / 3. This matches the small-angle
+    # oscillation mode we want to damp.
+    I_rot = m_seg * seg_len * seg_len / 3.0
     omega_n = math.sqrt(k_bend / max(I_rot, 1e-12))
-    c_damp = 2.0 * damping_ratio * I_rot * omega_n
+    c_damp = 2.0 * damping_ratio * I_rot * omega_n   # SI damping [N·m·s/rad]
 
     # Reference: shear modulus / polar moment, kept for documentation purposes.
     _ = youngs_modulus / (2.0 * (1.0 + poissons_ratio))  # G [Pa]
     _ = math.pi * r**4 / 2.0  # J [m⁴]
 
-    # USD PhysX DriveAPI angular drives measure angle in DEGREES, so stiffness
-    # units are N·m/deg (not N·m/rad).  Convert: k_usd = k_SI × (π/180).
-    DEG2RAD = math.pi / 180.0
-    return k_bend * DEG2RAD, c_damp * DEG2RAD
+    # Convert SI (per-rad) values to USD DriveAPI units (per-degree).
+    DEG_PER_RAD = math.pi / 180.0
+    return k_bend * DEG_PER_RAD, c_damp * DEG_PER_RAD
 
 
 def _build_parser() -> argparse.ArgumentParser:

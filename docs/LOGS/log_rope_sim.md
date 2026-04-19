@@ -88,3 +88,59 @@ tip z ≈ 0.200 m（= 0.8 − 0.6）       ✅
 - Isaac Sim 5.1 では `ArticulationView` が廃止され `isaacsim.core.prims.Articulation` に移行
 - kinematic body を articulation に含めると PhysX が拒否するため、関節反力の直接計測は不可
 - 代替として Newton 則による解析計算は十分な精度で動作することを確認
+
+---
+
+## 2026-04-19 — D6 DriveAPI 剛性キャリブレーション (deg vs rad 単位ずれ)
+
+### 症状
+- 水平片持ち梁テスト (E=1e9, N=25) の先端たわみが解析値 (δ≈54 mm) の 1/40 (≈1.4 mm) に
+- 振動周期が解析値の 1/8 (= `sqrt(64)`) に収束
+- ただし E への依存性 (1/√E スケーリング) は正しく再現 → 定数係数だけずれている
+
+### 原因の同定
+`UsdPhysics` の `PhysicsDriveAPI` スキーマ定義 (`schema.usda` 781-860 行)
+を精読したところ、以下の記述を発見。
+
+```
+float physics:stiffness   ... if angular drive: mass*DIST_UNITS*DIST_UNITS/degrees/second/second
+float physics:targetPosition ... if angular drive: degrees
+float physics:damping ... If angular drive: mass*DIST_UNITS*DIST_UNITS/second/degrees
+```
+
+**角度単位がラジアンではなく度 (degrees)。** つまり
+`stiffness` 属性に渡した値はトルク計算 `τ = stiffness · (target − θ)` の
+`θ` が度で評価されるため、SI 値 (N·m/rad) をそのまま渡すと実効剛性が
+`180/π ≈ 57.30` 倍になる。
+周期比 `sqrt(57.30) = 7.57` はユーザー観測の 8× とほぼ一致。
+
+### 実験検証 (`scripts/calibrate_drive.py`)
+2 セグメントロープ (Segment 0 kinematic / Segment 1 free)、重力 OFF、
+先端に初期角 2° を与え自由振動周期を測定 → `k_effective = ω² · I_end` で
+実効剛性を抽出。
+
+| 条件 | stiffness 属性 [S] | T_measured [ms] | T_analytic [ms] | k_eff/S |
+|---|---|---|---|---|
+| E=1e9, Raw (修正前) | 1.6362 | 25.05 | 190.26 | **57.70** |
+| E=1e9, S=π/180 | 0.01745 | 243.03 | 190.26 | 57.47 |
+| E=1e9, S=k·π/180 | 0.02854 | 190.02 | 190.26 | 57.48 |
+| E=1e7, S=k·π/180 | 2.855e-4 | 1897.00 | 1902.60 | 57.65 |
+
+全ての実験で `k_eff/S ≈ 57.30 (= 180/π)` で一致。複数 E で検証済みのため
+ソルバー段階/制動効果ではなく純粋な単位変換係数であることを確定。
+
+### 修正内容
+`scripts/hang_rope.py::_compute_joint_drive` の戻り値を
+`k_SI · π/180, c_SI · π/180` に変更 (DriveAPI 属性の単位系に変換)。
+加えて `I_rot` の修正 (`m·r²` → `m·L_seg²/3`, 端点回り剛体棒の慣性)
+により dt 自動調整と減衰計算が物理的に妥当な値を返すようにした。
+
+### 修正後の検証
+- E=1e9 水平片持ち (N=25): 平均先端 z ≈ 0.75 m (期待 0.746 m) → 誤差 < 1%
+- 片持ち振動周期 ≈ 0.38 s (期待 0.375 s) → 誤差 < 2%
+- 静的吊り下げ: Fz=0.981 N, T=0 Nm を維持 (既存テスト regression なし)
+- 2 セグ振動テスト (E=1e9, 1e7) : 周期誤差 < 0.3%
+
+### 残課題
+- 大振幅 (|θ| > 20°) では小振幅解析値から 10〜20% 外れる。大変形の非線形性
+  (束縛制約と遠心項) によるもので、バネ剛性そのものは正しい。
