@@ -45,7 +45,10 @@ def _compute_joint_drive(
     _ = youngs_modulus / (2.0 * (1.0 + poissons_ratio))  # G [Pa]
     _ = math.pi * r**4 / 2.0  # J [m⁴]
 
-    return k_bend, c_damp
+    # USD PhysX DriveAPI angular drives measure angle in DEGREES, so stiffness
+    # units are N·m/deg (not N·m/rad).  Convert: k_usd = k_SI × (π/180).
+    DEG2RAD = math.pi / 180.0
+    return k_bend * DEG2RAD, c_damp * DEG2RAD
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -135,11 +138,13 @@ def main() -> None:
 
     # Auto-adjust dt for numerical stability of the joint angular drive.
     # Stable explicit-ish integration requires omega_n * dt < ~1; use 0.5 (conservative).
+    # The relevant rotational inertia is the segment swinging about its joint endpoint,
+    # i.e. a uniform rod of length L_seg about one end: I_rot = m·L_seg²/3.
     r = args.rope_diameter / 2.0
     I_area = math.pi * r**4 / 4.0
     L_seg = args.rope_length / args.segments
     m_seg = args.rope_mass / args.segments
-    I_rot = max(m_seg * r * r, 1e-12)
+    I_rot = max(m_seg * L_seg * L_seg / 3.0, 1e-12)
     omega_n = math.sqrt((args.youngs_modulus * I_area / L_seg) / I_rot)
 
     dt_max = 0.5 / omega_n
@@ -162,10 +167,12 @@ def main() -> None:
     stage = simulation_app.context.get_stage()
     UsdGeom.Xform.Define(stage, "/World/Rope")
 
+    k_bend_si = k_bend / (math.pi / 180.0)  # SI value for display [N·m/rad]
     carb.log_warn(
         f"[rope] material: E={args.youngs_modulus:.3e} Pa, nu={args.poissons_ratio:.2f}, "
         f"zeta={args.damping_ratio:.2f} -> "
-        f"k_bend={k_bend:.4e} N·m/rad, c_damp={c_damp:.4e} N·m·s/rad, "
+        f"k_bend={k_bend_si:.4e} N·m/rad (USD={k_bend:.4e} N·m/deg), "
+        f"c_damp={c_damp:.4e} N·m·s/deg, "
         f"omega_n={omega_n:.1f} rad/s, dt={dt:.6f}s (dt_max={dt_max:.6f}s)"
     )
 
