@@ -19,35 +19,27 @@ _G = 9.81  # m/s²
 def _compute_joint_drive(
     youngs_modulus: float,
     poissons_ratio: float,
-    effective_scale: float,
     rope_diameter: float,
     rope_length: float,
     rope_mass: float,
     segments: int,
     damping_ratio: float = 0.3,
 ) -> tuple[float, float]:
-    """Convert continuum material properties to per-joint angular drive gains.
+    """Compute D6 joint drive stiffness and damping for a solid circular DLO.
 
-    Treats each segment as a short Euler–Bernoulli beam in bending. The angular spring
-    stiffness at a joint is k_bend = effective_scale * E * I / L_seg, where I is the
-    second moment of area of the rope cross-section. ``effective_scale`` accounts for
-    the fact that a braided rope is far less stiff than a solid rod of the same outer
-    diameter. Damping is set from a target critical-damping ratio assuming the segment
-    rotates about its joint with rotational inertia ≈ m_seg · r².
-
-    Returns:
-        (stiffness [N·m/rad], damping [N·m·s/rad]) per joint.
+    Uses Euler-Bernoulli beam theory: k_bend = E * I / L_seg
+    No empirical scale factor — valid for a single solid homogeneous rod.
     """
     r = rope_diameter / 2.0
     seg_len = rope_length / segments
-    inertia_area = math.pi * r**4 / 4.0  # I = π r⁴ / 4
-
-    k_bend = effective_scale * youngs_modulus * inertia_area / seg_len
-
     m_seg = rope_mass / segments
-    rot_inertia = max(m_seg * r * r, 1e-10)
-    omega_n = math.sqrt(k_bend / rot_inertia)
-    c_damp = 2.0 * damping_ratio * rot_inertia * omega_n
+
+    I = math.pi * r**4 / 4.0          # 2nd moment of area [m⁴]
+    k_bend = youngs_modulus * I / seg_len  # bending stiffness [N·m/rad]
+
+    I_rot = m_seg * r**2               # rotational inertia approx [kg·m²]
+    omega_n = math.sqrt(k_bend / max(I_rot, 1e-12))
+    c_damp = 2.0 * damping_ratio * I_rot * omega_n
 
     # Reference: shear modulus / polar moment, kept for documentation purposes.
     _ = youngs_modulus / (2.0 * (1.0 + poissons_ratio))  # G [Pa]
@@ -77,9 +69,9 @@ def _build_parser() -> argparse.ArgumentParser:
                       help="Young's modulus E of the rope material [Pa] (nylon ~1e9)")
     rope.add_argument("--poissons-ratio", type=float, default=0.35, metavar="NU",
                       help="Poisson's ratio ν of the rope material")
-    rope.add_argument("--effective-scale", type=float, default=1e-3, metavar="K",
-                      help="Effective bending stiffness scale: rope EI << solid rod EI "
-                           "due to braiding/twisting (try 1e-4 to 1e-2)")
+    rope.add_argument("--damping-ratio", type=float, default=0.3, metavar="ZETA",
+                      help="Target damping ratio ζ for the per-joint angular drive "
+                           "(0 = undamped, 1 = critically damped)")
 
     # ── simulation parameters ──────────────────────────────────────────────────
     sim = p.add_argument_group("simulation")
@@ -118,9 +110,40 @@ def main() -> None:
 
     from rope_sim.rope_builder import RopeBuilder, RopeConfig
 
+    import carb
+
+    k_bend, c_damp = _compute_joint_drive(
+        youngs_modulus=args.youngs_modulus,
+        poissons_ratio=args.poissons_ratio,
+        rope_diameter=args.rope_diameter,
+        rope_length=args.rope_length,
+        rope_mass=args.rope_mass,
+        segments=args.segments,
+        damping_ratio=args.damping_ratio,
+    )
+
+    # Auto-adjust dt for numerical stability of the joint angular drive.
+    # Stable explicit-ish integration requires omega_n * dt < ~1; use 0.5 (conservative).
+    r = args.rope_diameter / 2.0
+    I_area = math.pi * r**4 / 4.0
+    L_seg = args.rope_length / args.segments
+    m_seg = args.rope_mass / args.segments
+    I_rot = max(m_seg * r * r, 1e-12)
+    omega_n = math.sqrt((args.youngs_modulus * I_area / L_seg) / I_rot)
+
+    dt_max = 0.5 / omega_n
+    dt = min(args.dt, dt_max)
+    if dt < args.dt:
+        carb.log_warn(
+            f"[rope] dt reduced from {args.dt:.4f}s to {dt:.6f}s for stability "
+            f"(omega_n={omega_n:.1f} rad/s, dt_max={dt_max:.6f}s)"
+        )
+    # Use the (possibly reduced) dt for the rest of the run.
+    args.dt = dt
+
     world = World(
-        physics_dt=args.dt,
-        rendering_dt=args.dt,
+        physics_dt=dt,
+        rendering_dt=dt,
         stage_units_in_meters=1.0,
     )
     world.scene.add_default_ground_plane()
@@ -128,21 +151,11 @@ def main() -> None:
     stage = simulation_app.context.get_stage()
     UsdGeom.Xform.Define(stage, "/World/Rope")
 
-    k_bend, c_damp = _compute_joint_drive(
-        youngs_modulus=args.youngs_modulus,
-        poissons_ratio=args.poissons_ratio,
-        effective_scale=args.effective_scale,
-        rope_diameter=args.rope_diameter,
-        rope_length=args.rope_length,
-        rope_mass=args.rope_mass,
-        segments=args.segments,
-    )
-
-    import carb
     carb.log_warn(
         f"[rope] material: E={args.youngs_modulus:.3e} Pa, nu={args.poissons_ratio:.2f}, "
-        f"scale={args.effective_scale:.3e} -> "
-        f"k_bend={k_bend:.4e} N·m/rad, c_damp={c_damp:.4e} N·m·s/rad"
+        f"zeta={args.damping_ratio:.2f} -> "
+        f"k_bend={k_bend:.4e} N·m/rad, c_damp={c_damp:.4e} N·m·s/rad, "
+        f"omega_n={omega_n:.1f} rad/s, dt={dt:.6f}s (dt_max={dt_max:.6f}s)"
     )
 
     cfg = RopeConfig(

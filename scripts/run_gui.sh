@@ -2,7 +2,7 @@
 # GUI runner for hang_rope.py.
 #
 # Forwards every extra argument to the Python script. Common rope-material flags:
-#   --youngs-modulus 1e9 --poissons-ratio 0.35 --effective-scale 1e-3
+#   --youngs-modulus 1e9 --poissons-ratio 0.35 --damping-ratio 0.3
 # See scripts/hang_rope.py --help for the full list.
 set -euo pipefail
 
