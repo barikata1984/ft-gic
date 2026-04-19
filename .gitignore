@@ -12,6 +12,9 @@ outputs/
 logs/
 .DS_Store
 
+# Datasets
+datasets/
+
 # Docker — machine-specific files (use .env.example as template)
 docker/.env
 docker/docker-compose.override.yaml
