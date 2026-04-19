@@ -11,7 +11,8 @@ Headless: scripts/run_headless.sh [options]
 from __future__ import annotations
 
 import argparse
-import sys
+
+_G = 9.81  # m/s²
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -101,9 +102,12 @@ def _run(simulation_app, world, builder, args) -> None:
     import math
 
     import carb
+    import numpy as np
     from pxr import Gf, UsdGeom
 
     tip_prim = builder.segment_prims[-1]
+    seg_mass = args.rope_mass / args.segments
+    seg_length = args.rope_length / args.segments
 
     def _tip_pos():
         # 毎回新規 XformCache を生成してステール読み取りを防ぐ
@@ -111,18 +115,18 @@ def _run(simulation_app, world, builder, args) -> None:
 
     # Anchor circular motion setup
     circle = args.circle_radius > 0.0
+    omega = 0.0
     if circle:
         anchor_prim = builder.segment_prims[0]
-        # Retrieve the translate XformOp created in RopeBuilder._create_segment
         anchor_translate_op = next(
             op for op in UsdGeom.Xformable(anchor_prim).GetOrderedXformOps()
             if op.GetOpType() == UsdGeom.XformOp.TypeTranslate
         )
         omega = 2.0 * math.pi / args.circle_period
-        seg_length = args.rope_length / args.segments
         anchor_center_z = args.anchor_height - seg_length / 2.0
         carb.log_warn(
-            f"[rope] circular anchor: R={args.circle_radius}m, T={args.circle_period}s"
+            f"[rope] circular anchor: R={args.circle_radius}m, T={args.circle_period}s, "
+            f"omega={omega:.3f} rad/s"
         )
 
     def _update_anchor(t: float) -> None:
@@ -132,6 +136,75 @@ def _run(simulation_app, world, builder, args) -> None:
         y = args.circle_radius * math.sin(omega * t)
         anchor_translate_op.Set(Gf.Vec3d(x, y, anchor_center_z))
 
+    def _compute_anchor_wrench() -> tuple[np.ndarray, np.ndarray]:
+        """Compute anchor reaction force & torque analytically (Newton's 2nd law).
+
+        Assumes steady-state: vertical accelerations ≈ 0.
+        Horizontal centripetal accelerations a_i = -ω² * (x_i, y_i) at each segment.
+
+        F_anchor = sum_i(m_i * a_i) + (0, 0, m_total * g)   [Newton's 2nd for system]
+        T_anchor = sum_i(r_i × m_i * (a_i + g_vec_negated))  [moment balance about anchor joint]
+
+        The anchor joint is at the bottom of Segment_000 (= top of Segment_001).
+        """
+        cache = UsdGeom.XformCache()
+
+        # Anchor joint position: bottom endpoint of Segment_000
+        p0 = np.array(cache.GetLocalToWorldTransform(builder.segment_prims[0]).ExtractTranslation())
+        joint_pos = p0 + np.array([0.0, 0.0, -seg_length / 2.0])
+
+        F = np.array([0.0, 0.0, args.rope_mass * _G])  # gravity term always present
+        T = np.zeros(3)
+
+        for seg_prim in builder.segment_prims:
+            p = np.array(cache.GetLocalToWorldTransform(seg_prim).ExtractTranslation())
+            r = p - joint_pos  # vector from anchor joint to segment center
+
+            if circle:
+                # Centripetal acceleration (toward rotation axis)
+                a = np.array([-omega**2 * p[0], -omega**2 * p[1], 0.0])
+                F += seg_mass * a
+                # Torque from centripetal: r × (m * a)
+                T += np.cross(r, seg_mass * a)
+
+            # Torque from gravity (anchor must balance): r × (m * g upward)
+            T += np.cross(r, np.array([0.0, 0.0, seg_mass * _G]))
+
+        return F, T
+
+    def _expected_Fz() -> float:
+        return args.rope_mass * _G
+
+    def _expected_F_horizontal() -> float:
+        """Minimum centripetal force if rope centre-of-mass is exactly at anchor radius."""
+        if not circle:
+            return 0.0
+        return args.rope_mass * omega**2 * args.circle_radius
+
+    def _log_state(elapsed: float) -> None:
+        tip_pos = _tip_pos()
+        F, T = _compute_anchor_wrench()
+        F_h = math.hypot(F[0], F[1])
+
+        if circle:
+            F_h_min = _expected_F_horizontal()
+            carb.log_warn(
+                f"[rope] t={elapsed:5.2f}s  "
+                f"tip=({tip_pos[0]:+.4f}, {tip_pos[1]:+.4f}, {tip_pos[2]:+.4f}) m  "
+                f"F=({F[0]:+.3f}, {F[1]:+.3f}, {F[2]:+.3f}) N "
+                f"|Fxy|={F_h:.3f} [expect>={F_h_min:.3f}]  "
+                f"T=({T[0]:+.3f}, {T[1]:+.3f}, {T[2]:+.3f}) Nm"
+            )
+        else:
+            Fz_exp = _expected_Fz()
+            carb.log_warn(
+                f"[rope] t={elapsed:5.2f}s  "
+                f"tip=({tip_pos[0]:+.4f}, {tip_pos[1]:+.4f}, {tip_pos[2]:+.4f}) m  "
+                f"F=({F[0]:+.3f}, {F[1]:+.3f}, {F[2]:+.3f}) N "
+                f"[Fz expect={Fz_exp:.3f}]  "
+                f"T=({T[0]:+.3f}, {T[1]:+.3f}, {T[2]:+.3f}) Nm [expect≈0]"
+            )
+
     if args.headless:
         num_steps = int(args.duration / args.dt)
         carb.log_warn(f"[rope] running {num_steps} steps ({args.duration:.1f}s) headless")
@@ -139,20 +212,17 @@ def _run(simulation_app, world, builder, args) -> None:
             _update_anchor(step * args.dt)
             world.step(render=False)
             if step % 60 == 0:
-                pos = _tip_pos()
-                elapsed = step * args.dt
-                carb.log_warn(
-                    f"[rope] t={elapsed:5.2f}s  tip=({pos[0]:+.4f}, {pos[1]:+.4f}, {pos[2]:+.4f}) m"
-                )
+                _log_state(step * args.dt)
 
-        pos = _tip_pos()
-        carb.log_warn(f"[rope] final tip: ({pos[0]:+.4f}, {pos[1]:+.4f}, {pos[2]:+.4f}) m")
+        _log_state(num_steps * args.dt)
     else:
         carb.log_warn("[rope] running with GUI — close the window to exit")
         step = 0
         while simulation_app.is_running():
             _update_anchor(step * args.dt)
             world.step(render=True)
+            if step % 60 == 0:
+                _log_state(step * args.dt)
             step += 1
 
 
