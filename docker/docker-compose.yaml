@@ -76,3 +76,59 @@ services:
     tty: true
     working_dir: /workspace
     command: ["sleep", "infinity"]
+
+  gic:
+    build:
+      context: .
+      dockerfile: Dockerfile.gic
+      args:
+        HOST_UID: ${HOST_UID:-1000}
+        HOST_GID: ${HOST_GID:-1000}
+        HOST_USER: ${USER:-developer}
+    image: ft-gaussian-dlo-gic:latest
+
+    environment:
+      - HOST_USER=${USER:-developer}
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility,graphics,display
+      - DISPLAY=${DISPLAY:-:1}
+      - TORCH_CUDA_ARCH_LIST=8.6+PTX
+      - OPEN3D_CPU_RENDERING=true
+
+    volumes:
+      # ---- Project workspace --------------------------------------------------
+      - ..:/workspace:cached
+
+      # ---- Host git / SSH config (read-only) ----------------------------------
+      - ${HOME}/.ssh:/home/${USER:-developer}/.ssh:ro
+      - ${HOME}/.gitconfig:/home/${USER:-developer}/.gitconfig:ro
+
+      # ---- Claude Code config (shared with host) ------------------------------
+      - ${HOME}/.claude:/home/${USER:-developer}/.claude:cached
+
+      # ---- X11 GUI forwarding (Dear PyGui / Open3D viewer) --------------------
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+
+      # ---- Persistent pip / torch cache (survives rebuilds) ------------------
+      - ${HOME}/.cache/gic/pip:/home/${USER:-developer}/.cache/pip:rw
+      - ${HOME}/.cache/gic/torch:/home/${USER:-developer}/.cache/torch:rw
+
+    network_mode: host
+
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+    ipc: host
+    stdin_open: true
+    tty: true
+    working_dir: /workspace
+    command: ["sleep", "infinity"]
+
+    # profiles prevents `docker compose up -d` from starting gic alongside isaac-sim.
+    # VS Code devcontainer targets the service by name, bypassing profile restriction.
+    profiles: ["gic"]

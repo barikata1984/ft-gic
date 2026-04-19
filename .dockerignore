@@ -3,5 +3,8 @@
 
 # Whitelist the docker build context files
 !docker/Dockerfile
+!docker/Dockerfile.gic
 !docker/entrypoint.sh
+!docker/entrypoint.gic.sh
 !docker/requirements.txt
+!docker/requirements.gic.txt

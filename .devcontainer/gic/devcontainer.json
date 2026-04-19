@@ -1,13 +1,11 @@
 {
-  "name": "ft-gaussian-dlo (Isaac Sim 5.1.0)",
+  "name": "ft-gaussian-dlo — GIC (CUDA 12.1)",
 
-  // Use docker-compose as the backend — minimal devcontainer-specific config.
-  // The same docker-compose.yaml works standalone with `docker compose up`.
-  "dockerComposeFile": ["../docker/docker-compose.yaml"],
-  "service": "isaac-sim",
+  "dockerComposeFile": ["../../docker/docker-compose.yaml"],
+  "service": "gic",
+  "runServices": ["gic"],
   "workspaceFolder": "/workspace",
 
-  // Run as the non-root user created in the Dockerfile
   "remoteUser": "${localEnv:USER:developer}",
 
   "customizations": {
@@ -19,35 +17,34 @@
           "zsh": { "path": "/bin/zsh" }
         },
 
-        // Python
-        "python.defaultInterpreterPath": "/usr/local/bin/python3",
+        // Python — system Python 3.10 in the CUDA base image
+        "python.defaultInterpreterPath": "/usr/bin/python3",
         "python.analysis.extraPaths": [
-          "/workspace/src"
+          "/workspace/gic",
+          "/workspace/gic/utils",
+          "/workspace/gic/scene",
+          "/workspace/gic/simulator",
+          "/workspace/gic/gaussian_renderer"
         ],
+        // GIC upstream code is not type-annotated; off avoids noise
+        "python.analysis.typeCheckingMode": "off",
 
-        // Linting / formatting
-        "python.analysis.typeCheckingMode": "basic",
+        // Don't auto-format upstream GIC code on save
         "[python]": {
           "editor.defaultFormatter": "charliermarsh.ruff",
-          "editor.formatOnSave": true,
-          "editor.codeActionsOnSave": {
-            "source.fixAll": "explicit",
-            "source.organizeImports": "explicit"
-          }
+          "editor.formatOnSave": false
         },
 
         // Files
         "files.watcherExclude": {
           "**/.git/**": true,
           "**/__pycache__/**": true,
-          "**/.mypy_cache/**": true,
-          "**/outputs/**": true,
-          "**/runs/**": true,
+          "**/output/**": true,
+          "**/data/**": true,
           "**/wandb/**": true
         },
         "files.exclude": {
-          "**/__pycache__": true,
-          "**/.mypy_cache": true
+          "**/__pycache__": true
         }
       },
 
@@ -60,7 +57,7 @@
         "ms-python.vscode-pylance",
         "charliermarsh.ruff",
 
-        // --- Jupyter (interactive prototyping) ---
+        // --- Jupyter ---
         "ms-toolsai.jupyter",
 
         // --- Docker & containers ---
@@ -75,19 +72,15 @@
 
         // --- File formats ---
         "redhat.vscode-yaml",
-        "tamasfe.even-better-toml",
-        "yzhang.markdown-all-in-one",
 
         // --- Productivity ---
-        "streetsidesoftware.code-spell-checker",
         "usernamehw.errorlens",
-        "gruntfuggly.todo-tree",
-        "christian-kohler.path-intellisense"
+        "gruntfuggly.todo-tree"
       ]
     }
   },
 
-  "postCreateCommand": "echo '=== Dev container ready ===' && python --version",
+  "postCreateCommand": "echo '=== GIC container ready ===' && python3 --version && nvcc --version | tail -1",
 
   "shutdownAction": "none"
 }
