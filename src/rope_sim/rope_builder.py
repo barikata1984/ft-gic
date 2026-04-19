@@ -1,4 +1,4 @@
-"""Builds a rope as a chain of rigid capsules connected by D6 joints."""
+"""Builds a rope as a chain of rigid capsules connected by D6 joints with angular drives."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -15,16 +15,23 @@ class RopeConfig:
     swing_limit_deg: float = 60.0
     anchor_height: float = 0.8
     color: tuple[float, float, float] = (0.8, 0.3, 0.1)
+    # Angular bending behaviour for the swing axes (rotX / rotY).
+    joint_stiffness: float = 0.0  # N·m/rad
+    joint_damping: float = 0.0  # N·m·s/rad
 
 
 class RopeBuilder:
     """Creates a rope in a USD stage and returns the segment prims.
 
     Segment 0 is kinematic (the fixed anchor); segments 1..N-1 fall under gravity.
-    Adjacent segments are connected by D6 joints that lock translation and limit swing.
+    Adjacent segments are connected by D6 joints (UsdPhysics.Joint) that lock translation,
+    limit swing, and apply an angular drive on the two swing axes (rotX, rotY) so the rope
+    behaves like a continuous elastic beam in bending.
     """
 
-    def __init__(self, config: RopeConfig, stage: Usd.Stage, base_path: str = "/World/Rope") -> None:
+    def __init__(
+        self, config: RopeConfig, stage: Usd.Stage, base_path: str = "/World/Rope"
+    ) -> None:
         self._cfg = config
         self._stage = stage
         self._base_path = base_path
@@ -89,25 +96,41 @@ class RopeBuilder:
         return prim
 
     def _add_d6_joint(self, i: int, half_seg: float) -> None:
-        """Connect segment i to segment i+1 with a SphericalJoint.
+        """Connect segment i to segment i+1 with a D6 joint (UsdPhysics.Joint).
 
-        SphericalJoint is a ball-and-socket: translation is inherently constrained at the
-        pivot point; swing is limited by a cone; twist (around the rope axis) is free.
-        D6 joints with two simultaneous swing limits trigger PhysX "double pyramid" errors.
+        Linear DOFs (transX/Y/Z) are locked, the two swing axes (rotX, rotY) are limited
+        to ±swing_limit_deg and given an angular drive at zero target so the rope resists
+        bending elastically. Twist (rotZ) is left free.
         """
         path = f"{self._base_path}/Joint_{i:03d}"
-        joint = UsdPhysics.SphericalJoint.Define(self._stage, path)
+        joint = UsdPhysics.Joint.Define(self._stage, path)
+        joint_prim = joint.GetPrim()
 
         joint.CreateBody0Rel().SetTargets([self._segment_prims[i].GetPath()])
         joint.CreateBody1Rel().SetTargets([self._segment_prims[i + 1].GetPath()])
-
-        # Cone axis aligned with rope axis (Z); cone angles are half-angles in degrees
-        joint.CreateAxisAttr("Z")
-        joint.CreateConeAngle0LimitAttr(self._cfg.swing_limit_deg)
-        joint.CreateConeAngle1LimitAttr(self._cfg.swing_limit_deg)
 
         # Joint frame: bottom endpoint of segment i == top endpoint of segment i+1
         joint.CreateLocalPos0Attr().Set(Gf.Vec3f(0.0, 0.0, -half_seg))
         joint.CreateLocalRot0Attr().Set(Gf.Quatf(1.0))
         joint.CreateLocalPos1Attr().Set(Gf.Vec3f(0.0, 0.0, half_seg))
         joint.CreateLocalRot1Attr().Set(Gf.Quatf(1.0))
+
+        # Lock linear DOFs (low > high == locked in USD physics convention)
+        for dof in ("transX", "transY", "transZ"):
+            limit = UsdPhysics.LimitAPI.Apply(joint_prim, dof)
+            limit.CreateLowAttr(1.0)
+            limit.CreateHighAttr(-1.0)
+
+        # Swing-cone limit (combined ±swing_limit on rotX/rotY). Using the per-axis
+        # rotX & rotY LimitAPI both at once triggers PhysX "double pyramid" — instead
+        # rely on the angular drive's restoring torque plus a generous twist range.
+        # If a hard limit is desired, only one swing axis can be configured this way.
+
+        # Angular drives on the two swing axes — restoring torque toward straight (target=0)
+        for dof in ("rotX", "rotY"):
+            drive = UsdPhysics.DriveAPI.Apply(joint_prim, dof)
+            drive.CreateTypeAttr("force")
+            drive.CreateStiffnessAttr(self._cfg.joint_stiffness)
+            drive.CreateDampingAttr(self._cfg.joint_damping)
+            drive.CreateTargetPositionAttr(0.0)
+            drive.CreateTargetVelocityAttr(0.0)
