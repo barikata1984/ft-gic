@@ -98,9 +98,9 @@ def main() -> None:
     import carb
     import numpy as np
     from isaacsim.core.api import World
-    from isaacsim.sensors.camera import Camera
     from pxr import Gf, UsdGeom
 
+    from rope_sim.camera_utils import make_camera
     from rope_sim.rope_builder import RopeBuilder, RopeConfig
 
     # ── joint drive parameters ──────────────────────────────────────────────
@@ -138,9 +138,27 @@ def main() -> None:
         rendering_dt=capture_dt,
         stage_units_in_meters=1.0,
     )
-    world.scene.add_default_ground_plane()
 
     stage = simulation_app.context.get_stage()
+
+    # Invisible collision-only ground plane (no decorative grid mesh)
+    from pxr import UsdPhysics as _UsdPhysics
+    UsdGeom.Xform.Define(stage, "/World/GroundPlane")
+    _UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath("/World/GroundPlane"))
+    _plane = UsdGeom.Plane.Define(stage, "/World/GroundPlane/CollisionPlane")
+    _plane.CreateAxisAttr("Z")
+    _plane.CreatePurposeAttr(UsdGeom.Tokens.guide)
+    _UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath("/World/GroundPlane/CollisionPlane"))
+
+    # Lighting
+    from pxr import UsdLux as _UsdLux
+    _dome = _UsdLux.DomeLight.Define(stage, "/World/DomeLight")
+    _dome.CreateIntensityAttr(800.0)
+    _key = _UsdLux.DistantLight.Define(stage, "/World/KeyLight")
+    _key.CreateIntensityAttr(4000.0)
+    _key.CreateAngleAttr(0.53)
+    UsdGeom.Xformable(_key.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-60.0, 30.0, 0.0))
+
     UsdGeom.Xform.Define(stage, "/World/Rope")
 
     cfg = RopeConfig(
@@ -168,48 +186,15 @@ def main() -> None:
             t_op.Set(Gf.Vec3d(cur[0] + x0, cur[1], cur[2]))
 
     # ── camera placement ────────────────────────────────────────────────────
-    # Position: 1.5 m diagonally, looking at rope center
-    cam_pos = (1.2, -1.2, 0.8)
-    cam_target = (0.0, 0.0, args.anchor_height / 2.0)
-
-    camera = Camera(
+    # Parameters tuned via _check_camera.py: d=3.5, y=0.0, z=1.2, target_z=0.4
+    camera = make_camera(
+        world,
         prim_path="/World/RecordCam",
-        position=np.array(cam_pos),
-        frequency=args.fps,
+        position=[3.5, 0.0, 1.2],
+        target=[0.0, 0.0, 0.4],
+        fps=args.fps,
         resolution=(args.width, args.height),
     )
-
-    # Point camera toward rope center using look-at quaternion
-    _eye = np.array(cam_pos)
-    _tgt = np.array(cam_target)
-    _fwd = _tgt - _eye
-    _fwd /= np.linalg.norm(_fwd)
-    # Isaac Sim camera default forward = -Z in camera frame; use USD camera convention
-    # We set orientation via prim xform after initialize()
-    world.reset()
-    camera.initialize()
-
-    # Orient camera to look at rope: compute rotation from -Z to _fwd direction
-    # Using Gf.Rotation for axis-angle quaternion
-    _cam_prim = stage.GetPrimAtPath("/World/RecordCam")
-    _xformable = UsdGeom.Xformable(_cam_prim)
-    _xform_ops = _xformable.GetOrderedXformOps()
-    # Set translate op
-    for op in _xform_ops:
-        if op.GetOpType() == UsdGeom.XformOp.TypeTranslate:
-            op.Set(Gf.Vec3d(*cam_pos))
-            break
-    # Compute look-at rotation: camera -Z → _fwd
-    _default_fwd = Gf.Vec3d(0, 0, -1)
-    _target_fwd = Gf.Vec3d(*_fwd.tolist())
-    _rot = Gf.Rotation(_default_fwd, _target_fwd)
-    _quat = _rot.GetQuaternion()
-    _qi = _quat.GetImaginary()
-    _qr = _quat.GetReal()
-    for op in _xform_ops:
-        if op.GetOpType() == UsdGeom.XformOp.TypeOrient:
-            op.Set(Gf.Quatd(float(_qr), float(_qi[0]), float(_qi[1]), float(_qi[2])))
-            break
 
     # ── anchor circle setup ─────────────────────────────────────────────────
     circle = args.circle_radius > 0.0
