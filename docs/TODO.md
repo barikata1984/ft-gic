@@ -30,6 +30,9 @@
 - [x] D6 DriveAPI 剛性のキャリブレーション（USD 角度単位が deg のため π/180 変換を追加）
 - [ ] コンテナリビルド（Dockerfile の `/isaac-sim/kit/` chown 修正を適用）
 - [ ] リビルド後のキャッシュエラー解消・アセットダウンロード確認
-- [ ] kinematic body 円運動のレンダラー反映調査（`RigidPrimView.set_world_poses` が GUI に反映されない根本原因の特定と修正）
+- [x] kinematic body 円運動のレンダラー反映調査・修正（USD TranslateOp 直書き + physics_callback で根本解決）
+- [x] GUI 円運動のカクカク・低速問題修正（`add_physics_callback` + `world.step(render=True)` 一本化）
 - [ ] 円運動の定常状態検証（duration 30s 以上での |Fxy| 収束確認）
+- [x] オフスクリーン動画録画スクリプト実装（`scripts/record_rope.py`, `scripts/run_record.sh`）
+- [x] 剛性モデルを充填率 φ 方式に改修（E=1e9 固定、`--fill-factor` で I_eff 調整）
 - [ ] より複雑なロープ変形シミュレーション（外力付与・障害物との接触等）

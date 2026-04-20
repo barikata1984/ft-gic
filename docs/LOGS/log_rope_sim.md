@@ -177,3 +177,183 @@ headless の `get_world_poses(usd=False)` が返す値は err_r=0.0000 だが、
   - `omni.physx.get_physx_simulation_interface().set_kinematic_target()` 直接呼び出し
   - または dynamic body + velocity 制御への切り替え
 - 定常状態での |Fxy| 収束確認（30 s 以上）
+
+---
+
+## 2026-04-20 — GUI 表示バグ修正（幽霊セグメント・再生速度・ツイスト）
+
+### 問題
+
+GUI 実行時に 3 つの症状が同時発生していた：
+
+1. **幽霊セグメント**: ロープ上端（seg0）と同形状のプリムがロープ本体から離れた位置に静止表示される
+2. **再生速度が極端に遅い**: 物理時間 3 秒（1 周）を実現するのに実時間で数分かかる
+3. **ロープが自転（ツイスト）する**: 指示していないのに rotZ 方向の回転が蓄積する
+
+### 根本原因の調査
+
+#### 幽霊セグメントの原因
+
+`RigidPrimView.set_world_poses()` のソースコード（`isaacsim.core.prims/impl/rigid_prim.py`）を精読した結果：
+
+- シミュレーション中（`is_physics_handle_valid() == True`）は `usd` パラメータが**完全に無視**され、`_physics_view.set_transforms(pose, indices)` のみが呼ばれる
+- `set_transforms()` は PhysX のみ更新し、**Fabric（レンダラーのシーングラフ）は更新しない**
+- Fabric は `world.reset()` 時に USD の初期値で初期化されるため、seg0 は reset 前の USD 位置（オフセット前の `x=0`）に固定されたまま表示される
+- 結果：PhysX では `x=R` で円運動しているが、レンダラーは `x=0` の位置に幽霊を描画する
+
+#### 再生速度が遅い原因
+
+`omega_n ≈ 5160 rad/s`（ナイロン E=1e9 Pa）により dt が `1/60 s → 0.0001 s` に約 170 倍縮小される。`world.step(render=True)` を毎ステップ呼んでいたため、1 秒の物理時間に約 1 万回レンダリングが走り実時間より遥かに遅くなっていた。
+
+公式ドキュメントにより確認：`world.step()` は 1 呼び出しで physics_dt 1 ステップのみ進む（rendering_dt 分まとめて進むわけではない）。
+
+#### ツイスト（自転）の原因
+
+D6 ジョイントの rotZ（ツイスト軸）が `free` かつ drive なしのため、円運動の慣性力が生む小さなツイストトルクが毎ステップ蓄積し、ロープ全体が徐々に自転していた。
+
+### 修正内容
+
+| 症状 | 修正箇所 | 内容 |
+|------|----------|------|
+| 幽霊セグメント | `scripts/hang_rope.py` `_update_anchor()` | `_get_fabric_hierarchy()` → `get_world_xform()` → `SetTranslateOnly()` → `set_world_xform()` で Fabric を毎フレーム明示的に更新 |
+| 再生速度 | `scripts/hang_rope.py` GUI ループ | `world.step(render=True)` を毎ステップ呼ぶのをやめ、`render_every = round((1/60) / dt)` ステップごとに 1 回だけ描画 |
+| ツイスト | `src/rope_sim/rope_builder.py` `_add_d6_joint()` | rotZ に `stiffness=0, damping=joint_damping` の drive を追加してツイスト角速度を減衰させる |
+
+加えて、`python scripts/hang_rope.py` を直接実行した際に `rope_sim` モジュールが見つからない問題（`ModuleNotFoundError`）を `sys.path.insert(0, src/)` で修正した。
+
+---
+
+## 2026-04-20 — GUI 円運動のカクカク・低速問題修正
+
+### 問題
+
+前回の `render_every` 間引き修正後もGUI上の動作がカクカクで、物理時間3秒（1周）の円運動が実時間数分かかる状態が続いていた。RTX 5090 の性能を考えると説明がつかず、実装上の誤りを疑い調査した。
+
+### 根本原因
+
+`SimulationContext.step()` のソース（`isaacsim.core.api/simulation_context/simulation_context.py`）を精読した結果、以下が判明：
+
+- `world.step(render=True)` → `self._app.update()` — Kit アプリが `rendering_dt / physics_dt` 分の物理サブステップを**自動実行**してから描画する
+- `world.step(render=False)` → `_physics_context._step()` — 物理を**1ステップのみ**進める
+
+前回の修正（`render_every=167` 回に1回 `render=True`）は意図と逆効果だった：
+- `render=True` の1回 → `_app.update()` → 167サブステップ + 描画（これは正しい）
+- `render=False` の166回 → 物理1ステップ × 166回 → 余分な物理計算が混入し、かつアンカー更新もPythonループ側で1フレーム1回しか呼ばれないため Kit の167サブステップ内ではアンカーが固定 → カクカクの原因
+
+### 修正内容
+
+**GUIループの抜本的整理（`scripts/hang_rope.py`）：**
+
+1. **アンカー更新を `world.add_physics_callback()` に移行**
+   - `subscribe_physics_step_events` 経由で PhysX の全サブステップ前にコールバック登録
+   - Kit 内部の167サブステップそれぞれで正しい時刻 `world.current_time` のアンカー位置が設定される
+
+2. **GUIループを `world.step(render=True)` 一本に整理**
+   - 手動の `render_every` 間引きを廃止
+   - Kit が `rendering_dt=1/60 s` / `physics_dt≈0.0001 s` の比を自動管理
+
+3. **Fabric 更新はレンダーフレームごと1回**（各サブステップでは不要）
+
+### 結果
+
+実行ログ確認：実時間46秒で物理時間11.8秒（実時間比 ≈ 0.84）、tip の (x,y) が滑らかに円を描き `|Fxy| ≈ 0.044 N`（理論値と一致）。GUI表示が大幅に滑らかになった。
+
+---
+
+## 2026-04-20 — seg0 表示ズレ問題の根本解決
+
+### 問題
+
+GUI で seg0（kinematic アンカー）が運動方向と逆方向にズレて表示される。物理的に不自然。
+
+### 調査過程
+
+`SimulationContext.render()` のソース確認により、`force_update()` が呼ばれるのは `world.render()` 経由のみで、`world.step(render=True)` が内部で呼ぶ `_app.update()` では呼ばれないことを確認。
+
+複数のアプローチを試みたが、いずれも問題が残った：
+1. `world.render()` + 手動サブステップループ → カクカク再発・幽霊再出現
+2. `usdrt` Fabric 直書き → タイミング競合でズレ
+3. `world.current_time` を毎ループ呼ぶ → `_app.update()` 内の 167 サブステップでアンカー固定
+
+### 根本原因の確定
+
+`RigidPrimView.set_world_poses()` はシミュレーション中（`is_physics_handle_valid() == True`）に `usd` パラメータを完全無視し `_physics_view.set_transforms()` のみ呼ぶ。これは PhysX のみを更新し Fabric（レンダラー）を更新しない。Fabric は `world.reset()` 時の USD 初期値で固定されるため、seg0 の表示位置が原点付近に固定される。
+
+### 最終的な解決策
+
+**USD `TranslateOp.Set()` + `add_physics_callback` の組み合わせ。**
+
+- `RigidPrimView` を廃止し、`UsdGeom.Xformable(seg0_prim).GetOrderedXformOps()` から直接 `TranslateOp` を取得
+- USD 属性への直接書き込みは Isaac Sim の USD-Fabric sync レイヤーにより毎フレーム Fabric に伝播される
+- `world.add_physics_callback("anchor_circle", lambda _: _update_anchor(world.current_time))` で Kit の全サブステップ内で正しい時刻のアンカー位置を設定
+
+### 結果
+
+seg0 のズレ（幽霊・逆方向オフセット）が解消。ロープ全体が一体となって滑らかに円運動するようになった。
+
+---
+
+## 2026-04-20 — オフスクリーン動画録画・ヤング率修正
+
+### オフスクリーン動画録画（`scripts/record_rope.py`）
+
+GUI なしで物理挙動を視覚的に検証する手段として、ヘッドレスオフスクリーンレンダリング + MP4 書き出しスクリプトを実装。
+
+**設計方針:**
+- `isaacsim.sensors.camera.Camera` で `/World/RecordCam` を配置、`get_rgba()` で numpy 配列取得
+- 物理ステップ `steps_per_frame = round(1/fps / dt)` おきに1フレーム撮影（毎ステップレンダリング不要）
+- OpenCV `VideoWriter`（Isaac Sim 内蔵 cv2、FFMPEG バックエンド有）で MP4 エンコード
+- `simulation_app.close()` が `sys.exit()` 相当のため、エンコードを close() 前に実行
+- 出力先: `debug/<timestamp>_rope[_circle_r<R>].mp4`
+
+**実装で発生した問題と解決:**
+- `GfQuatf` → `GfQuatd` 型不一致エラー → `Quatd` に修正
+- `simulation_app.close()` 後のコードが実行されない → エンコードを close() 前に移動
+- コンテナ内に `ffmpeg` バイナリなし → Isaac Sim 同梱 cv2（FFMPEG ビルトイン）で解決
+
+**パフォーマンス（E=1e7）:**
+- physics steps: 10,321（dt=969µs）、capture every 34 steps → 302 frames @ 30fps
+- wall-time 比: **0.57x**（E=1e9 時の 0.07x から 8 倍改善）
+
+### ヤング率の修正（中実棒 → 撚りロープ実効値）
+
+**問題:** E=1e9 Pa（ナイロン中実棒）では剛性が高すぎ、ほぼ変形しない棒として挙動。
+
+**調査結果（外部ソース）:**
+- 固体ナイロン: E = 2.5〜3.9 GPa
+- 撚り・編組ナイロンロープの実効弾性率: **0.6〜2 GPa**（繊維単体の 40〜50%）
+- 柔らかいロープ下限: 50〜100 MPa（パッキング率・ブレイド角依存）
+- 出典: Cambridge Materials Case Study on Ropes; MDPI Braided Rope Modulus Paper
+
+**対処:** デフォルト値を `E=1e9` → `E=1e7` Pa に変更（`hang_rope.py`, `record_rope.py` 両方）。
+撚りロープの下限付近で、目視で柔らかい挙動を確認。
+
+**効果:**
+- omega_n: 5160 → 516 rad/s → dt_max: 97µs → 969µs（10倍緩和）
+- wall-time 比: 0.07x → 0.57x
+
+**検証動画（`debug/`）:**
+- `20260420_040328_rope_circle_r0.10.mp4` — T=3s, E=1e7
+- `20260420_040512_rope_circle_r0.10.mp4` — T=1s（1回転/秒）
+- `20260420_040759_rope_circle_r0.10.mp4` — T=5s（1回転/5秒）、15s 録画
+
+### 剛性モデルの修正：E の調整 → 充填率 φ による I_eff
+
+**問題提起:** E を 1e9→1e7 に下げるのは「材料を偽造する」行為。正しくは断面形状（ロープの空隙）を表現すべき。
+
+**設計変更:**
+- E はナイロン繊維本来の値（1e9 Pa）に戻す
+- `fill_factor φ`（充填率）を新設し `I_eff = I_solid × φ` で実効断面二次モーメントを計算
+- デフォルト φ=0.3（撚りナイロンロープの文献的下限）
+
+**実装:**
+- `_compute_joint_drive()` に `fill_factor` 引数追加（`hang_rope.py`, `record_rope.py` 両方）
+- `--fill-factor` CLI 引数追加（デフォルト 0.3）
+- omega_n 計算も `I_eff` を参照するよう修正
+
+**φ=0.3（E=1e9）の特性:**
+- 等価実効 E = 3×10⁸ Pa、omega_n=2827 rad/s、dt=177µs、wall-time 比 0.12x
+
+**φ=0.01（E=1e9）≒ E=1e7 の特性:**
+- omega_n=516 rad/s、dt=969µs、wall-time 比 0.57x（前回と同等）
+- `debug/20260420_041737_rope_circle_r0.10.mp4` — T=5s、15s 録画で確認
