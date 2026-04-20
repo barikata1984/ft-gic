@@ -156,3 +156,12 @@ class RopeBuilder:
             drive.CreateDampingAttr(self._cfg.joint_damping)
             drive.CreateTargetPositionAttr(0.0)
             drive.CreateTargetVelocityAttr(0.0)
+
+        # Twist (rotZ): no stiffness (free to rotate), but damped to prevent
+        # uncontrolled twist accumulation from circular-motion inertia forces.
+        twist_drive = UsdPhysics.DriveAPI.Apply(joint_prim, "rotZ")
+        twist_drive.CreateTypeAttr("force")
+        twist_drive.CreateStiffnessAttr(0.0)
+        twist_drive.CreateDampingAttr(self._cfg.joint_damping)
+        twist_drive.CreateTargetPositionAttr(0.0)
+        twist_drive.CreateTargetVelocityAttr(0.0)

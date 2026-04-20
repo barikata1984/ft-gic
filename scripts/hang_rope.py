@@ -12,6 +12,10 @@ from __future__ import annotations
 
 import argparse
 import math
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 _G = 9.81  # m/s²
 
@@ -24,10 +28,18 @@ def _compute_joint_drive(
     rope_mass: float,
     segments: int,
     damping_ratio: float = 0.3,
+    fill_factor: float = 0.3,
 ) -> tuple[float, float]:
-    """Compute D6 joint drive stiffness and damping for a solid circular DLO.
+    """Compute D6 joint drive stiffness and damping for a twisted/braided rope.
 
-    Uses Euler-Bernoulli beam theory: k_bend = E · I / L_seg (SI, N·m/rad).
+    Uses Euler-Bernoulli beam theory: k_bend = E · I_eff / L_seg (SI, N·m/rad).
+
+    I_eff = (π·r⁴/4) · fill_factor accounts for the void fraction of a twisted
+    or braided rope: only the load-bearing fibres contribute to bending stiffness,
+    not the air gaps between strands. For twisted nylon rope fill_factor ≈ 0.3–0.5
+    (literature: MDPI braided rope modulus paper, Cambridge Materials case study).
+    E remains the fibre material value (solid nylon ~1e9 Pa); fill_factor captures
+    the cross-section geometry, not the material.
 
     The USD PhysX DriveAPI for angular drives is documented to measure angle
     in DEGREES (see PhysicsDriveAPI schema: "stiffness … mass·DIST²/degrees/s²",
@@ -41,8 +53,9 @@ def _compute_joint_drive(
     seg_len = rope_length / segments
     m_seg = rope_mass / segments
 
-    I = math.pi * r**4 / 4.0          # 2nd moment of area [m⁴]
-    k_bend = youngs_modulus * I / seg_len  # SI bending stiffness [N·m/rad]
+    I_solid = math.pi * r**4 / 4.0          # solid circular 2nd moment of area [m⁴]
+    I_eff = I_solid * fill_factor            # effective I for twisted/braided rope
+    k_bend = youngs_modulus * I_eff / seg_len  # SI bending stiffness [N·m/rad]
 
     # Rotational inertia of a segment swinging about its joint endpoint:
     # uniform rod about end, I = m · L_seg² / 3. This matches the small-angle
@@ -78,7 +91,10 @@ def _build_parser() -> argparse.ArgumentParser:
     rope.add_argument("--rope-mass", type=float, default=0.1, metavar="KG",
                       help="Total rope mass [kg]")
     rope.add_argument("--youngs-modulus", type=float, default=1e9, metavar="PA",
-                      help="Young's modulus E of the rope material [Pa] (nylon ~1e9)")
+                      help="Young's modulus E of the rope fibre material [Pa] (solid nylon ~1e9)")
+    rope.add_argument("--fill-factor", type=float, default=0.3, metavar="PHI",
+                      help="Cross-section fill factor φ for twisted/braided rope (0–1). "
+                           "I_eff = I_solid * φ. Typical nylon rope: 0.3–0.5")
     rope.add_argument("--poissons-ratio", type=float, default=0.35, metavar="NU",
                       help="Poisson's ratio ν of the rope material")
     rope.add_argument("--damping-ratio", type=float, default=0.3, metavar="ZETA",
@@ -145,6 +161,7 @@ def main() -> None:
         rope_mass=args.rope_mass,
         segments=args.segments,
         damping_ratio=args.damping_ratio,
+        fill_factor=args.fill_factor,
     )
 
     # Auto-adjust dt for numerical stability of the joint angular drive.
@@ -152,11 +169,11 @@ def main() -> None:
     # The relevant rotational inertia is the segment swinging about its joint endpoint,
     # i.e. a uniform rod of length L_seg about one end: I_rot = m·L_seg²/3.
     r = args.rope_diameter / 2.0
-    I_area = math.pi * r**4 / 4.0
+    I_eff = math.pi * r**4 / 4.0 * args.fill_factor  # effective 2nd moment of area
     L_seg = args.rope_length / args.segments
     m_seg = args.rope_mass / args.segments
     I_rot = max(m_seg * L_seg * L_seg / 3.0, 1e-12)
-    omega_n = math.sqrt((args.youngs_modulus * I_area / L_seg) / I_rot)
+    omega_n = math.sqrt((args.youngs_modulus * I_eff / L_seg) / I_rot)
 
     dt_max = 0.5 / omega_n
     dt = min(args.dt, dt_max)
@@ -168,9 +185,11 @@ def main() -> None:
     # Use the (possibly reduced) dt for the rest of the run.
     args.dt = dt
 
+    # rendering_dt is fixed at 1/60 s so the GUI runs at real-time speed regardless
+    # of how small physics dt is (Isaac Sim sub-steps physics between render frames).
     world = World(
         physics_dt=dt,
-        rendering_dt=dt,
+        rendering_dt=1.0 / 60.0,
         stage_units_in_meters=1.0,
     )
     world.scene.add_default_ground_plane()
@@ -267,18 +286,24 @@ def _run(simulation_app, world, builder, args) -> None:
     circle = args.circle_radius > 0.0
     omega = 0.0
     anchor_center_z = args.anchor_height - seg_length / 2.0
-    anchor_view = None
-
     if circle:
-        # Separate view for seg0 so we can set its kinematic target each step.
-        # set_world_poses(usd=False) writes directly to the PhysX kinematic target,
-        # which gives PhysX velocity information (no infinite-velocity teleport).
-        anchor_view = RigidPrimView(prim_paths_expr=seg_paths[0], reset_xform_properties=False)
-        anchor_view.initialize()
         omega = 2.0 * math.pi / args.circle_period
         carb.log_warn(
             f"[rope] circular anchor: R={args.circle_radius}m, T={args.circle_period}s, "
             f"omega={omega:.3f} rad/s"
+        )
+
+    # Anchor update via USD TranslateOp — NOT RigidPrimView.set_world_poses().
+    # During simulation set_world_poses() ignores `usd` and calls _physics_view.set_transforms()
+    # (PhysX only), leaving Fabric un-updated → ghost artefact. Writing the USD TranslateOp
+    # is propagated to Fabric by Isaac Sim's USD-Fabric sync each step.
+    _anchor_translate_op = None
+    if circle:
+        from pxr import Gf as _Gf, UsdGeom as _UsdGeom
+        _anchor_prim = builder.segment_prims[0]
+        _anchor_translate_op = next(
+            op for op in _UsdGeom.Xformable(_anchor_prim).GetOrderedXformOps()
+            if op.GetOpType() == _UsdGeom.XformOp.TypeTranslate
         )
 
     def _update_anchor(t: float) -> None:
@@ -286,10 +311,12 @@ def _run(simulation_app, world, builder, args) -> None:
             return
         x = args.circle_radius * math.cos(omega * t)
         y = args.circle_radius * math.sin(omega * t)
-        anchor_view.set_world_poses(
-            positions=np.array([[x, y, anchor_center_z]], dtype=np.float32),
-            usd=True,
-        )
+        _anchor_translate_op.Set(_Gf.Vec3d(x, y, anchor_center_z))
+
+    if circle:
+        # Register as physics callback so it fires inside every Kit substep
+        # (not just once per Python loop iteration which skips ~166 of 167 substeps).
+        world.add_physics_callback("anchor_circle", lambda _: _update_anchor(world.current_time))
 
     def _compute_anchor_wrench() -> tuple[np.ndarray, np.ndarray]:
         """Compute anchor reaction force & torque analytically (Newton's 2nd law).
@@ -374,33 +401,37 @@ def _run(simulation_app, world, builder, args) -> None:
             _csv_writer.writerow([f"{t:.6f}", idx, f"{p[0]:.6f}", f"{p[1]:.6f}", f"{p[2]:.6f}"])
 
     log_every = max(1, args.log_every)
+    _last_log_t = -1.0
+
     try:
         if args.headless:
             num_steps = int(args.duration / args.dt)
             carb.log_warn(f"[rope] running {num_steps} steps ({args.duration:.1f}s) headless")
             for step in range(num_steps):
-                _update_anchor(step * args.dt)
+                _update_anchor(world.current_time)
                 world.step(render=False)
+                t = world.current_time
                 if args.tip_trace:
-                    _log_tip(step * args.dt)
+                    _log_tip(t)
                 if step % log_every == 0:
-                    _log_state(step * args.dt)
-                    _record_segments(step * args.dt)
+                    _log_state(t)
+                    _record_segments(t)
 
-            _log_state(num_steps * args.dt)
-            _record_segments(num_steps * args.dt)
+            t = world.current_time
+            _log_state(t)
+            _record_segments(t)
         else:
             carb.log_warn("[rope] running with GUI — close the window to exit")
-            step = 0
             while simulation_app.is_running():
-                _update_anchor(step * args.dt)
                 world.step(render=True)
+                t = world.current_time
                 if args.tip_trace:
-                    _log_tip(step * args.dt)
-                if step % log_every == 0:
-                    _log_state(step * args.dt)
-                    _record_segments(step * args.dt)
-                step += 1
+                    _log_tip(t)
+                log_interval = log_every * args.dt
+                if t - _last_log_t >= log_interval:
+                    _log_state(t)
+                    _record_segments(t)
+                    _last_log_t = t
     finally:
         if _csv_file is not None:
             _csv_file.close()
