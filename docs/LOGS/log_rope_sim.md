@@ -437,3 +437,126 @@ y(t) = 0                                    [t ≤ t_settle]
 
 Y-Z プロット: `debug/snapshots/oscillate_yz_positions.png`
 動画: `debug/20260420_07*_oscillate_rope.mp4`
+
+---
+
+## 2026-04-20 — モジュール化・ポアソン比活用の調査・検討
+
+### モジュール化の現状評価
+
+4スクリプト（hang / record / swing / oscillate）の重複状況を分析した結果：
+
+**適切にモジュール化済み:**
+- `RopeBuilder` / `RopeConfig` — 全スクリプトで import
+- `make_camera()` — record / swing / oscillate で import
+
+**未モジュール化の重複（4箇所以上）:**
+
+| 重複箇所 | 件数 | 備考 |
+|---|---|---|
+| `_compute_joint_drive()` | 4 | `oscillate_rope.py` では `poissons_ratio` 引数が欠落 |
+| dt Nyquist クランプ計算 | 4 | ロジックは完全同一、ログプレフィックスのみ異なる |
+| 不可視 GroundPlane 構築 | 3 | record / swing / oscillate |
+| DomeLight + KeyLight 設置 | 3 | 強度・角度すべて同一 |
+| `_encode_mp4()` | 3 | avc1 → mp4v フォールバック込み |
+
+**提案するモジュール構成:**
+```
+src/rope_sim/
+  sim_utils.py   — compute_joint_drive(), clamp_dt()
+  scene_utils.py — add_invisible_ground(), add_default_lighting(), setup_recording_world()
+  video_utils.py — encode_mp4(), default_output_path()
+```
+
+hang_rope.py は GUI/CSV/力計算など固有機能が多いため、共通化対象は `compute_joint_drive` と `clamp_dt` のみとし、無理に統合しない。
+
+### ポアソン比活用の調査
+
+**現状:** `poissons_ratio` は全スクリプトの `_compute_joint_drive()` 引数に存在するが未使用。`hang_rope.py:68` で `G = E/(2(1+ν))` と `J = π·r⁴/2` を計算しているが結果を `_` に捨てている（ドキュメント目的と明記）。
+
+**活用可能な箇所: ねじり剛性 `k_torsion`**
+
+```
+G      = E / (2(1+ν))          # せん断弾性率
+J_eff  = (π·r⁴/2) · φ         # 実効極断面二次モーメント
+k_torsion = G · J_eff / L_seg  # ねじり剛性 [N·m/rad]
+```
+
+ν=0.35 (ナイロン) のとき `k_torsion / k_bend = 1/(1+ν) ≈ 0.74`。曲げ剛性の約 74% のねじり剛性。
+
+**曲げ剛性への影響:** Euler-Bernoulli 梁ではポアソン比は曲げ剛性に影響しない（E·I のみ）。Timoshenko 梁のせん断補正係数には影響するが、ロープの細長比 L/d=60 ではせん断変形は無視できる。
+
+**実装方針:**
+- `_compute_joint_drive()` の戻り値に `k_torsion_deg` を追加
+- `rope_builder.py` `_add_d6_joint()` の rotZ `stiffness` に設定
+- モジュール化リファクタリングと同時実施が効率的
+
+**注意点:** 撚りロープはねじりと軸張力がヘリックス構造でカップリングするため、等方性棒モデルは近似。ただしゼロ剛性よりは物理的に妥当。
+
+---
+
+## 2026-04-20 — モジュール化リファクタリング・hang_rope.py 録画機能追加・円運動録画バグ修正
+
+### モジュール化リファクタリング
+
+以下の3モジュールを新規作成し、5スクリプトをリファクタリング：
+
+| モジュール | 提供する関数 |
+|---|---|
+| `src/rope_sim/sim_utils.py` | `compute_joint_drive()`, `clamp_dt()` |
+| `src/rope_sim/scene_utils.py` | `add_invisible_ground()`, `add_default_lighting()`, `setup_recording_world()` |
+| `src/rope_sim/video_utils.py` | `encode_mp4()`, `default_output_path()` |
+
+- `compute_joint_drive()` から `poissons_ratio` 引数を除去（未使用だったため）
+- `clamp_dt()` は `label` 引数でログプレフィックスを変えられるよう汎用化
+- `setup_recording_world()` が `World` 生成 + 不可視床 + ライティングを一括担当
+- `default_output_path()` は `__file__` から2親上を `debug/` として解決
+
+修正したスクリプト: `record_rope.py`, `swing_rope.py`, `oscillate_rope.py`, `_check_camera.py`, `hang_rope.py`
+
+**発見したバグと修正:**
+- リファクタ後に `capture_dt` が未定義エラー → 各録画ループ前に `capture_dt = 1.0 / args.fps` を追加
+- `oscillate_rope.py` の `debug_dir` 未定義エラー → `out_path.parent / "snapshots"` に修正
+
+### hang_rope.py 録画機能追加
+
+`--record` フラグで MP4 録画モードに切替。実装済みの `make_camera()`, `encode_mp4()`, `default_output_path()` を活用。
+
+- `--record` 指定時は `--headless` を自動有効化
+- 静的ハング: カメラ `[3.5, 0.0, 1.2]` → target `[0.0, 0.0, 0.4]`（他スクリプトと共通）
+- 円運動: カメラ `[4.5, 0.0, 1.0]` → target `[0.0, 0.0, 0.5]`（全方位をカバー）
+
+### 円運動録画バグの根本修正
+
+**症状（修正前）:** 録画開始後にロープが激しく暴れる。
+
+**原因の同定:** `20260420_054350_rope_circle_r0.10.mp4`（旧 record_rope.py 生成、暴れなし）と比較して構造の違いを特定。
+
+旧 `record_rope.py` の構造:
+```
+x0 オフセット適用  ←─┐ make_camera() 前
+コールバック登録   ←─┘
+make_camera()  # world.reset() + warmup 15ステップ（コールバック有効状態）
+```
+
+誤った hang_rope.py の構造:
+```
+make_camera(warmup_frames=0)  # world.reset() → x0・コールバックがクリアされる
+_run_record() 内で x0 再適用・コールバック登録
+手動 warmup 15ステップ・settle 6s
+```
+
+**修正:** x0 オフセット適用とコールバック登録を `make_camera()` の**前**に移動し、`warmup_frames` をデフォルト 15 に戻した。`make_camera()` 内の `world.reset()` + 15ウォームアップステップがコールバック有効状態で走るため、ロープが正しい初期状態から滑らかに起動する。
+
+**重要な知見:** `make_camera()` が内部で `world.reset()` を呼ぶため、USD 状態（オフセット・コールバック）を `make_camera()` 後に設定しても `world.reset()` でクリアされる。コールバック登録は `make_camera()` 前に行う必要がある。
+
+### 全4パターン録画結果
+
+| スクリプト | 出力ファイル | フレーム数 |
+|---|---|---|
+| `hang_rope.py --record` | `20260420_084829_hang_rope.mp4` | - |
+| `hang_rope.py --record --circle-radius 0.1` | `20260420_084554_hang_rope_circle_r0.10.mp4` | 301 |
+| `swing_rope.py` | `20260420_085113_swing_rope.mp4` | 301 |
+| `oscillate_rope.py` | `20260420_085257_oscillate_rope.mp4` | 331 |
+
+全フレームでロープが画角内に収まり、暴れなし。

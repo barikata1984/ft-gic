@@ -28,15 +28,23 @@
 - [x] アンカー反力・トルクの解析的ログ出力実装（Newton の第二法則）
 - [x] 重力・遠心力を考慮した妥当性検証（headless 実行で確認）
 - [x] D6 DriveAPI 剛性のキャリブレーション（USD 角度単位が deg のため π/180 変換を追加）
-- [ ] コンテナリビルド（Dockerfile の `/isaac-sim/kit/` chown 修正を適用）
-- [ ] リビルド後のキャッシュエラー解消・アセットダウンロード確認
+- [x] コンテナリビルド（Dockerfile の `/isaac-sim/kit/` chown 修正を適用）
+- [x] リビルド後のキャッシュエラー解消・アセットダウンロード確認
 - [x] kinematic body 円運動のレンダラー反映調査・修正（USD TranslateOp 直書き + physics_callback で根本解決）
 - [x] GUI 円運動のカクカク・低速問題修正（`add_physics_callback` + `world.step(render=True)` 一本化）
-- [ ] 円運動の定常状態検証（duration 30s 以上での |Fxy| 収束確認）
+- [x] 円運動の定常状態検証（duration 30s 以上での |Fxy| 収束確認）
 - [x] オフスクリーン動画録画スクリプト実装（`scripts/record_rope.py`, `scripts/run_record.sh`）
 - [x] 剛性モデルを充填率 φ 方式に改修（E=1e9 固定、`--fill-factor` で I_eff 調整）
 - [x] 正弦波振動録画スクリプト実装（`scripts/swing_rope.py`, `scripts/run_swing.sh`）
 - [x] カメラ配置をモジュール化（`src/rope_sim/camera_utils.py` の `make_camera()`）
 - [x] カメラ配置チェックスクリプト実装（`scripts/_check_camera.py`）
 - [x] Y軸単振動録画スクリプト実装（`scripts/oscillate_rope.py`）
+- [x] スクリプト群のモジュール化リファクタリング
+  - `src/rope_sim/sim_utils.py`: `compute_joint_drive()`（poissons_ratio 除去）、`clamp_dt()`
+  - `src/rope_sim/scene_utils.py`: `add_invisible_ground()`、`add_default_lighting()`、`setup_recording_world()`
+  - `src/rope_sim/video_utils.py`: `encode_mp4()`、`default_output_path()`
+- [ ] ねじり剛性の物理実装（`poissons_ratio` を有効活用）
+  - `G = E / (2(1+ν))`、`J_eff = (π·r⁴/2)·φ`、`k_torsion = G·J_eff/L_seg`
+  - `rope_builder.py` の rotZ DriveAPI `stiffness` に `k_torsion` を設定
+  - モジュール化リファクタと同時実施が望ましい
 - [ ] より複雑なロープ変形シミュレーション（外力付与・障害物との接触等）
