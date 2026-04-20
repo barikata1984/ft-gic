@@ -20,59 +20,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 _G = 9.81  # m/s²
 
 
-def _compute_joint_drive(
-    youngs_modulus: float,
-    poissons_ratio: float,
-    rope_diameter: float,
-    rope_length: float,
-    rope_mass: float,
-    segments: int,
-    damping_ratio: float = 0.3,
-    fill_factor: float = 0.3,
-) -> tuple[float, float]:
-    """Compute D6 joint drive stiffness and damping for a twisted/braided rope.
-
-    Uses Euler-Bernoulli beam theory: k_bend = E · I_eff / L_seg (SI, N·m/rad).
-
-    I_eff = (π·r⁴/4) · fill_factor accounts for the void fraction of a twisted
-    or braided rope: only the load-bearing fibres contribute to bending stiffness,
-    not the air gaps between strands. For twisted nylon rope fill_factor ≈ 0.3–0.5
-    (literature: MDPI braided rope modulus paper, Cambridge Materials case study).
-    E remains the fibre material value (solid nylon ~1e9 Pa); fill_factor captures
-    the cross-section geometry, not the material.
-
-    The USD PhysX DriveAPI for angular drives is documented to measure angle
-    in DEGREES (see PhysicsDriveAPI schema: "stiffness … mass·DIST²/degrees/s²",
-    "targetPosition … if angular drive: degrees"). Empirically a single D6
-    drive with stiffness attr S produces a restoring torque τ = S·(180/π)·θ
-    for θ in radians, i.e. the effective SI stiffness is S · 180/π. To get an
-    SI-correct k_bend we therefore must write   stiffness_attr = k_bend · π/180.
-    The same conversion applies to the damping coefficient.
-    """
-    r = rope_diameter / 2.0
-    seg_len = rope_length / segments
-    m_seg = rope_mass / segments
-
-    I_solid = math.pi * r**4 / 4.0          # solid circular 2nd moment of area [m⁴]
-    I_eff = I_solid * fill_factor            # effective I for twisted/braided rope
-    k_bend = youngs_modulus * I_eff / seg_len  # SI bending stiffness [N·m/rad]
-
-    # Rotational inertia of a segment swinging about its joint endpoint:
-    # uniform rod about end, I = m · L_seg² / 3. This matches the small-angle
-    # oscillation mode we want to damp.
-    I_rot = m_seg * seg_len * seg_len / 3.0
-    omega_n = math.sqrt(k_bend / max(I_rot, 1e-12))
-    c_damp = 2.0 * damping_ratio * I_rot * omega_n   # SI damping [N·m·s/rad]
-
-    # Reference: shear modulus / polar moment, kept for documentation purposes.
-    _ = youngs_modulus / (2.0 * (1.0 + poissons_ratio))  # G [Pa]
-    _ = math.pi * r**4 / 2.0  # J [m⁴]
-
-    # Convert SI (per-rad) values to USD DriveAPI units (per-degree).
-    DEG_PER_RAD = math.pi / 180.0
-    return k_bend * DEG_PER_RAD, c_damp * DEG_PER_RAD
-
-
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Rope hanging simulation",
@@ -134,12 +81,25 @@ def _build_parser() -> argparse.ArgumentParser:
     geom.add_argument("--segment-csv", type=str, default="", metavar="PATH",
                       help="Write all segment positions (t, seg, x, y, z) to CSV")
 
+    # ── recording ─────────────────────────────────────────────────────────────
+    rec = p.add_argument_group("recording")
+    rec.add_argument("--record", action="store_true", default=False,
+                     help="Record simulation to MP4 (forces headless)")
+    rec.add_argument("--fps", type=int, default=30, metavar="N")
+    rec.add_argument("--width", type=int, default=1280, metavar="PX")
+    rec.add_argument("--height", type=int, default=720, metavar="PX")
+    rec.add_argument("--output", type=str, default="",
+                     help="Output MP4 path (default: debug/<timestamp>_hang_rope.mp4)")
+
     return p
 
 
 def main() -> None:
     # parse_known_args: Isaac Sim's python.sh may inject extra flags
     args, _ = _build_parser().parse_known_args()
+
+    if args.record:
+        args.headless = True
 
     # SimulationApp MUST be created before any other Isaac Sim / pxr imports
     from isaacsim import SimulationApp
@@ -150,12 +110,12 @@ def main() -> None:
     from pxr import UsdGeom
 
     from rope_sim.rope_builder import RopeBuilder, RopeConfig
+    from rope_sim.sim_utils import clamp_dt, compute_joint_drive
 
     import carb
 
-    k_bend, c_damp = _compute_joint_drive(
+    k_bend, c_damp = compute_joint_drive(
         youngs_modulus=args.youngs_modulus,
-        poissons_ratio=args.poissons_ratio,
         rope_diameter=args.rope_diameter,
         rope_length=args.rope_length,
         rope_mass=args.rope_mass,
@@ -164,37 +124,34 @@ def main() -> None:
         fill_factor=args.fill_factor,
     )
 
-    # Auto-adjust dt for numerical stability of the joint angular drive.
-    # Stable explicit-ish integration requires omega_n * dt < ~1; use 0.5 (conservative).
-    # The relevant rotational inertia is the segment swinging about its joint endpoint,
-    # i.e. a uniform rod of length L_seg about one end: I_rot = m·L_seg²/3.
-    r = args.rope_diameter / 2.0
-    I_eff = math.pi * r**4 / 4.0 * args.fill_factor  # effective 2nd moment of area
-    L_seg = args.rope_length / args.segments
-    m_seg = args.rope_mass / args.segments
-    I_rot = max(m_seg * L_seg * L_seg / 3.0, 1e-12)
-    omega_n = math.sqrt((args.youngs_modulus * I_eff / L_seg) / I_rot)
-
-    dt_max = 0.5 / omega_n
-    dt = min(args.dt, dt_max)
-    if dt < args.dt:
-        carb.log_warn(
-            f"[rope] dt reduced from {args.dt:.4f}s to {dt:.6f}s for stability "
-            f"(omega_n={omega_n:.1f} rad/s, dt_max={dt_max:.6f}s)"
-        )
-    # Use the (possibly reduced) dt for the rest of the run.
+    dt = clamp_dt(
+        args.dt,
+        youngs_modulus=args.youngs_modulus,
+        rope_diameter=args.rope_diameter,
+        rope_length=args.rope_length,
+        rope_mass=args.rope_mass,
+        segments=args.segments,
+        fill_factor=args.fill_factor,
+        label="rope",
+    )
     args.dt = dt
 
-    # rendering_dt is fixed at 1/60 s so the GUI runs at real-time speed regardless
-    # of how small physics dt is (Isaac Sim sub-steps physics between render frames).
+    rendering_dt = (1.0 / args.fps) if args.record else (1.0 / 60.0)
     world = World(
         physics_dt=dt,
-        rendering_dt=1.0 / 60.0,
+        rendering_dt=rendering_dt,
         stage_units_in_meters=1.0,
     )
-    world.scene.add_default_ground_plane()
 
     stage = simulation_app.context.get_stage()
+
+    if args.record:
+        from rope_sim.scene_utils import add_default_lighting, add_invisible_ground
+        add_invisible_ground(stage)
+        add_default_lighting(stage)
+    else:
+        world.scene.add_default_ground_plane()
+
     UsdGeom.Xform.Define(stage, "/World/Rope")
 
     k_bend_si = k_bend / (math.pi / 180.0)  # SI value for display [N·m/rad]
@@ -202,8 +159,7 @@ def main() -> None:
         f"[rope] material: E={args.youngs_modulus:.3e} Pa, nu={args.poissons_ratio:.2f}, "
         f"zeta={args.damping_ratio:.2f} -> "
         f"k_bend={k_bend_si:.4e} N·m/rad (USD={k_bend:.4e} N·m/deg), "
-        f"c_damp={c_damp:.4e} N·m·s/deg, "
-        f"omega_n={omega_n:.1f} rad/s, dt={dt:.6f}s (dt_max={dt_max:.6f}s)"
+        f"c_damp={c_damp:.4e} N·m·s/deg, dt={dt:.6f}s"
     )
 
     cfg = RopeConfig(
@@ -220,21 +176,76 @@ def main() -> None:
     builder = RopeBuilder(cfg, stage)
     builder.build()
 
-    # Shift all segments so initial position matches the t=0 circle point (R, 0, z).
-    # Without this, the first physics step teleports seg0 by R=circle_radius, sending
-    # a shock through the rope that causes large transient oscillations.
-    if args.circle_radius > 0.0 and not args.horizontal:
+    if args.record:
         from pxr import Gf, UsdGeom as _UG
-        x0 = args.circle_radius  # cos(0) = 1
-        for prim in builder.segment_prims:
-            t_op = next(
-                op for op in _UG.Xformable(prim).GetOrderedXformOps()
+        from rope_sim.camera_utils import make_camera
+
+        circle = args.circle_radius > 0.0
+        seg_length = args.rope_length / args.segments
+
+        # Apply circle start offset BEFORE make_camera (which calls world.reset()).
+        # This matches the working record_rope.py approach.
+        if circle:
+            x0 = args.circle_radius
+            for prim in builder.segment_prims:
+                t_op = next(
+                    op for op in _UG.Xformable(prim).GetOrderedXformOps()
+                    if op.GetOpType() == _UG.XformOp.TypeTranslate
+                )
+                cur = t_op.Get()
+                t_op.Set(Gf.Vec3d(cur[0] + x0, cur[1], cur[2]))
+
+            omega = 2.0 * math.pi / args.circle_period
+            anchor_center_z = args.anchor_height - seg_length / 2.0
+            _anchor_translate_op = next(
+                op for op in _UG.Xformable(builder.segment_prims[0]).GetOrderedXformOps()
                 if op.GetOpType() == _UG.XformOp.TypeTranslate
             )
-            cur = t_op.Get()
-            t_op.Set(Gf.Vec3d(cur[0] + x0, cur[1], cur[2]))
 
-    world.reset()
+            def _update_anchor(t: float) -> None:
+                x = args.circle_radius * math.cos(omega * t)
+                y = args.circle_radius * math.sin(omega * t)
+                _anchor_translate_op.Set(Gf.Vec3d(x, y, anchor_center_z))
+
+            world.add_physics_callback(
+                "anchor_circle", lambda _: _update_anchor(world.current_time)
+            )
+            carb.log_warn(
+                f"[rope] circular anchor: R={args.circle_radius}m, T={args.circle_period}s, "
+                f"omega={omega:.3f} rad/s"
+            )
+
+        if circle:
+            cam_pos = [4.5, 0.0, 1.0]
+            cam_target = [0.0, 0.0, 0.5]
+        else:
+            cam_pos = [3.5, 0.0, 1.2]
+            cam_target = [0.0, 0.0, 0.4]
+
+        # make_camera calls world.reset() + 15 warmup steps internally.
+        # Callback is already registered, so warmup runs with correct anchor motion.
+        camera = make_camera(
+            world,
+            prim_path="/World/RecordCam",
+            position=cam_pos,
+            target=cam_target,
+            fps=args.fps,
+            resolution=(args.width, args.height),
+        )
+    else:
+        # Shift segments to circle start position before reset (non-record path)
+        if args.circle_radius > 0.0 and not args.horizontal:
+            from pxr import Gf, UsdGeom as _UG
+            x0 = args.circle_radius
+            for prim in builder.segment_prims:
+                t_op = next(
+                    op for op in _UG.Xformable(prim).GetOrderedXformOps()
+                    if op.GetOpType() == _UG.XformOp.TypeTranslate
+                )
+                cur = t_op.Get()
+                t_op.Set(Gf.Vec3d(cur[0] + x0, cur[1], cur[2]))
+        world.reset()
+        camera = None
 
     # Apply a small lateral offset to the tip segment for perturbation tests.
     if abs(args.tip_offset_x) > 0.0:
@@ -253,9 +264,65 @@ def main() -> None:
             f"(tip now at {translate_op.Get()})"
         )
 
-    _run(simulation_app, world, builder, args)
+    if args.record:
+        _run_record(simulation_app, world, builder, camera, args)
+    else:
+        _run(simulation_app, world, builder, args)
 
     simulation_app.close()
+
+
+def _run_record(simulation_app, world, builder, camera, args) -> None:
+    import time
+
+    import carb
+    import numpy as np
+
+    from rope_sim.video_utils import default_output_path, encode_mp4
+
+    circle = args.circle_radius > 0.0
+    dt = args.dt
+
+    capture_dt = 1.0 / args.fps
+    steps_per_frame = max(1, int(round(capture_dt / dt)))
+    num_steps = int(args.duration / dt)
+    expected_frames = num_steps // steps_per_frame
+
+    out_path = Path(args.output) if args.output else default_output_path(
+        f"_hang_rope_circle_r{args.circle_radius:.2f}" if circle else "_hang_rope"
+    )
+
+    carb.log_warn(
+        f"[rope] recording: {num_steps} steps, every {steps_per_frame} → "
+        f"~{expected_frames} frames @ {args.fps}fps → {args.duration:.1f}s"
+    )
+    carb.log_warn(f"[rope] output: {out_path}")
+
+    frames: list[np.ndarray] = []
+    wall_start = time.time()
+
+    for step in range(num_steps):
+        do_render = (step % steps_per_frame == 0)
+        world.step(render=do_render)
+        if do_render:
+            rgba = camera.get_rgba()
+            if rgba is not None and rgba.size > 0:
+                frames.append(rgba[:, :, :3].copy())
+
+        if step % (steps_per_frame * args.fps * 5) == 0:
+            carb.log_warn(
+                f"[rope] sim={world.current_time:.1f}s  wall={time.time()-wall_start:.1f}s  "
+                f"frames={len(frames)}"
+            )
+
+    carb.log_warn(f"[rope] done: {len(frames)} frames in {time.time()-wall_start:.1f}s")
+
+    if frames:
+        carb.log_warn(f"[rope] encoding {len(frames)} frames ...")
+        encode_mp4(frames, out_path, args.fps)
+        carb.log_warn(f"[rope] saved → {out_path}")
+    else:
+        carb.log_warn("[rope] no frames captured — skipping encode")
 
 
 def _run(simulation_app, world, builder, args) -> None:

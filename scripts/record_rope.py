@@ -23,28 +23,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 _G = 9.81
 
 
-def _compute_joint_drive(
-    youngs_modulus: float,
-    poissons_ratio: float,
-    rope_diameter: float,
-    rope_length: float,
-    rope_mass: float,
-    segments: int,
-    damping_ratio: float = 0.3,
-    fill_factor: float = 0.3,
-) -> tuple[float, float]:
-    r = rope_diameter / 2.0
-    seg_len = rope_length / segments
-    m_seg = rope_mass / segments
-    I_eff = math.pi * r**4 / 4.0 * fill_factor  # effective 2nd moment for twisted rope
-    k_bend = youngs_modulus * I_eff / seg_len
-    I_rot = m_seg * seg_len * seg_len / 3.0
-    omega_n = math.sqrt(k_bend / max(I_rot, 1e-12))
-    c_damp = 2.0 * damping_ratio * I_rot * omega_n
-    DEG_PER_RAD = math.pi / 180.0
-    return k_bend * DEG_PER_RAD, c_damp * DEG_PER_RAD
-
-
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         description="Record rope simulation to MP4",
@@ -97,16 +75,16 @@ def main() -> None:
 
     import carb
     import numpy as np
-    from isaacsim.core.api import World
     from pxr import Gf, UsdGeom
 
     from rope_sim.camera_utils import make_camera
     from rope_sim.rope_builder import RopeBuilder, RopeConfig
+    from rope_sim.scene_utils import setup_recording_world
+    from rope_sim.sim_utils import clamp_dt, compute_joint_drive
 
     # ── joint drive parameters ──────────────────────────────────────────────
-    k_bend, c_damp = _compute_joint_drive(
+    k_bend, c_damp = compute_joint_drive(
         youngs_modulus=args.youngs_modulus,
-        poissons_ratio=args.poissons_ratio,
         rope_diameter=args.rope_diameter,
         rope_length=args.rope_length,
         rope_mass=args.rope_mass,
@@ -115,51 +93,19 @@ def main() -> None:
         fill_factor=args.fill_factor,
     )
 
-    r = args.rope_diameter / 2.0
-    I_eff = math.pi * r**4 / 4.0 * args.fill_factor
-    L_seg = args.rope_length / args.segments
-    m_seg = args.rope_mass / args.segments
-    I_rot = max(m_seg * L_seg * L_seg / 3.0, 1e-12)
-    omega_n = math.sqrt((args.youngs_modulus * I_eff / L_seg) / I_rot)
-    dt_max = 0.5 / omega_n
-    dt = min(args.dt, dt_max)
-    if dt < args.dt:
-        carb.log_warn(
-            f"[record] dt reduced {args.dt:.4f}→{dt:.6f}s "
-            f"(omega_n={omega_n:.1f} rad/s)"
-        )
+    dt = clamp_dt(
+        args.dt,
+        youngs_modulus=args.youngs_modulus,
+        rope_diameter=args.rope_diameter,
+        rope_length=args.rope_length,
+        rope_mass=args.rope_mass,
+        segments=args.segments,
+        fill_factor=args.fill_factor,
+        label="record",
+    )
     args.dt = dt
 
-    # physics_dt=dt, rendering_dt drives how often camera.get_rgba() is valid.
-    # We capture every N physics steps so rendering_dt can stay at 1/fps.
-    capture_dt = 1.0 / args.fps
-    world = World(
-        physics_dt=dt,
-        rendering_dt=capture_dt,
-        stage_units_in_meters=1.0,
-    )
-
-    stage = simulation_app.context.get_stage()
-
-    # Invisible collision-only ground plane (no decorative grid mesh)
-    from pxr import UsdPhysics as _UsdPhysics
-    UsdGeom.Xform.Define(stage, "/World/GroundPlane")
-    _UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath("/World/GroundPlane"))
-    _plane = UsdGeom.Plane.Define(stage, "/World/GroundPlane/CollisionPlane")
-    _plane.CreateAxisAttr("Z")
-    _plane.CreatePurposeAttr(UsdGeom.Tokens.guide)
-    _UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath("/World/GroundPlane/CollisionPlane"))
-
-    # Lighting
-    from pxr import UsdLux as _UsdLux
-    _dome = _UsdLux.DomeLight.Define(stage, "/World/DomeLight")
-    _dome.CreateIntensityAttr(800.0)
-    _key = _UsdLux.DistantLight.Define(stage, "/World/KeyLight")
-    _key.CreateIntensityAttr(4000.0)
-    _key.CreateAngleAttr(0.53)
-    UsdGeom.Xformable(_key.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-60.0, 30.0, 0.0))
-
-    UsdGeom.Xform.Define(stage, "/World/Rope")
+    world, stage = setup_recording_world(simulation_app, physics_dt=dt, fps=args.fps)
 
     cfg = RopeConfig(
         length=args.rope_length,
@@ -228,16 +174,16 @@ def main() -> None:
         )
 
     # ── output path ─────────────────────────────────────────────────────────
-    debug_dir = Path(__file__).resolve().parents[1] / "debug"
-    debug_dir.mkdir(exist_ok=True)
+    from rope_sim.video_utils import default_output_path
+
     if args.output:
         out_path = Path(args.output)
     else:
-        ts = time.strftime("%Y%m%d_%H%M%S")
-        suffix = f"_circle_r{args.circle_radius:.2f}" if circle else ""
-        out_path = debug_dir / f"{ts}_rope{suffix}.mp4"
+        suffix = f"_circle_r{args.circle_radius:.2f}" if circle else "_rope"
+        out_path = default_output_path(suffix)
 
     # ── recording loop ──────────────────────────────────────────────────────
+    capture_dt = 1.0 / args.fps
     num_steps = int(args.duration / dt)
     # Capture every N physics steps to achieve ~fps
     steps_per_frame = max(1, int(round(capture_dt / dt)))
@@ -278,29 +224,15 @@ def main() -> None:
     # incrementally and don't hold all in RAM. But frames are already collected,
     # so we open the pipe here and flush before close().
     if frames:
+        from rope_sim.video_utils import encode_mp4
+
         carb.log_warn(f"[record] encoding {len(frames)} frames via ffmpeg ...")
-        _encode_mp4_ffmpeg(frames, out_path, args.fps)
+        encode_mp4(frames, out_path, args.fps)
         carb.log_warn(f"[record] saved → {out_path}")
     else:
         carb.log_warn("[record] no frames captured — skipping encode")
 
     simulation_app.close()
-
-
-def _encode_mp4_ffmpeg(frames: list, out_path: Path, fps: int) -> None:
-    # cv2 in Isaac Sim's Python env has FFMPEG built-in — use VideoWriter directly
-    import cv2
-
-    h, w = frames[0].shape[:2]
-    # Try H.264 first (requires FFMPEG backend), fall back to mp4v
-    fourcc = cv2.VideoWriter_fourcc(*"avc1")
-    writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
-    if not writer.isOpened():
-        fourcc = cv2.VideoWriter_fourcc(*"mp4v")
-        writer = cv2.VideoWriter(str(out_path), fourcc, fps, (w, h))
-    for frame in frames:
-        writer.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
-    writer.release()
 
 
 if __name__ == "__main__":

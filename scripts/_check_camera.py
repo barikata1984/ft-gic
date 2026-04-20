@@ -13,20 +13,6 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 
-def _compute_joint_drive(rope_diameter, rope_length, rope_mass, segments,
-                          youngs_modulus=1e9, fill_factor=0.3, damping_ratio=0.3):
-    r = rope_diameter / 2.0
-    seg_len = rope_length / segments
-    m_seg = rope_mass / segments
-    I_eff = math.pi * r**4 / 4.0 * fill_factor
-    k_bend = youngs_modulus * I_eff / seg_len
-    I_rot = m_seg * seg_len * seg_len / 3.0
-    omega_n = math.sqrt(k_bend / max(I_rot, 1e-12))
-    c_damp = 2.0 * damping_ratio * I_rot * omega_n
-    DEG = math.pi / 180.0
-    return k_bend * DEG, c_damp * DEG
-
-
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--cam-dist", type=float, default=2.0)
@@ -46,46 +32,26 @@ def main():
     import numpy as np
     from isaacsim.core.api import World
     from isaacsim.sensors.camera import Camera
-    from pxr import Gf, UsdGeom, UsdLux, UsdPhysics
+    from pxr import UsdGeom
 
     from rope_sim.rope_builder import RopeBuilder, RopeConfig
+    from rope_sim.scene_utils import add_default_lighting, add_invisible_ground
+    from rope_sim.sim_utils import clamp_dt, compute_joint_drive
 
     rope_length = 0.6
     anchor_height = rope_length + 0.1   # 0.7 m
     segments = 25
-    k_bend, c_damp = _compute_joint_drive(0.01, rope_length, 0.1, segments)
+    k_bend, c_damp = compute_joint_drive(0.01, rope_length, 0.1, segments)
 
-    L_seg = rope_length / segments
-    m_seg = 0.1 / segments
-    I_eff = math.pi * 0.005**4 / 4.0 * 0.3
-    omega_n = math.sqrt((1e9 * I_eff / L_seg) / max(m_seg * L_seg**2 / 3.0, 1e-12))
-    dt = min(1/60, 0.5 / omega_n)
-    carb.log_warn(f"[check] dt={dt:.6f}s  omega_n={omega_n:.1f} rad/s")
+    dt = clamp_dt(1 / 60, 1e9, 0.01, rope_length, 0.1, segments, label="check")
+    carb.log_warn(f"[check] dt={dt:.6f}s")
 
     world = World(physics_dt=dt, rendering_dt=1/30, stage_units_in_meters=1.0)
     stage = app.context.get_stage()
 
-    # ── Minimal ground: physics plane only, no visual wall ──────────────────
-    # Instead of add_default_ground_plane() which adds a decorative vertical panel,
-    # define a pure collision plane at z=0.
-    ground_path = "/World/GroundPlane"
-    UsdGeom.Xform.Define(stage, ground_path)
-    ground_prim = stage.GetPrimAtPath(ground_path)
-    UsdPhysics.CollisionAPI.Apply(ground_prim)
-    plane_geom = UsdGeom.Plane.Define(stage, ground_path + "/CollisionPlane")
-    plane_geom.CreateAxisAttr("Z")
-    plane_geom.CreatePurposeAttr(UsdGeom.Tokens.guide)   # invisible
-    UsdPhysics.CollisionAPI.Apply(stage.GetPrimAtPath(ground_path + "/CollisionPlane"))
-
+    add_invisible_ground(stage)
     UsdGeom.Xform.Define(stage, "/World/Rope")
-
-    # ── Lighting ─────────────────────────────────────────────────────────────
-    dome = UsdLux.DomeLight.Define(stage, "/World/DomeLight")
-    dome.CreateIntensityAttr(800.0)
-    dist_light = UsdLux.DistantLight.Define(stage, "/World/KeyLight")
-    dist_light.CreateIntensityAttr(4000.0)
-    dist_light.CreateAngleAttr(0.53)
-    UsdGeom.Xformable(dist_light.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-60.0, 30.0, 0.0))
+    add_default_lighting(stage)
 
     # ── Rope ─────────────────────────────────────────────────────────────────
     cfg = RopeConfig(length=rope_length, diameter=0.01, mass=0.1, segments=segments,
