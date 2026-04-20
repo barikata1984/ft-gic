@@ -21,3 +21,6 @@ docker/docker-compose.override.yaml
 
 # Claude Code local settings
 .claude/settings.local.json
+
+# Debug output (videos, temporary artifacts)
+debug/
