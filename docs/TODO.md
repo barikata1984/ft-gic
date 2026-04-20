@@ -35,4 +35,7 @@
 - [ ] 円運動の定常状態検証（duration 30s 以上での |Fxy| 収束確認）
 - [x] オフスクリーン動画録画スクリプト実装（`scripts/record_rope.py`, `scripts/run_record.sh`）
 - [x] 剛性モデルを充填率 φ 方式に改修（E=1e9 固定、`--fill-factor` で I_eff 調整）
+- [x] 正弦波振動録画スクリプト実装（`scripts/swing_rope.py`, `scripts/run_swing.sh`）
+- [x] カメラ配置をモジュール化（`src/rope_sim/camera_utils.py` の `make_camera()`）
+- [x] カメラ配置チェックスクリプト実装（`scripts/_check_camera.py`）
 - [ ] より複雑なロープ変形シミュレーション（外力付与・障害物との接触等）
