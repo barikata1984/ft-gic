@@ -71,6 +71,102 @@ def _lookat_quaternion(
     return np.array([qw, qx, qy, qz], dtype=float)
 
 
+def sphere_camera_positions(
+    radius: float = 3.59,
+    target: list[float] | None = None,
+    n_equator: int = 4,
+    n_upper: int = 2,
+) -> list[np.ndarray]:
+    """Return camera positions distributed on a sphere of given radius.
+
+    Layout: n_equator cameras on the equatorial ring at target height,
+    n_upper cameras on an upper ring at elevation 45°.
+    All positions are offset so the sphere center coincides with target.
+
+    Args:
+        radius: Sphere radius [m].
+        target: Look-at target (sphere center) in world space. Defaults to [0,0,0.4].
+        n_equator: Number of cameras on the equatorial ring.
+        n_upper: Number of cameras on the 45° elevation ring.
+
+    Returns:
+        List of position arrays, length = n_equator + n_upper.
+    """
+    if target is None:
+        target = [0.0, 0.0, 0.4]
+    cx, cy, cz = target
+    positions = []
+
+    # Equatorial ring at elevation 0° (same Z as target)
+    for i in range(n_equator):
+        az = 2.0 * math.pi * i / n_equator
+        positions.append(np.array([cx + radius * math.cos(az),
+                                   cy + radius * math.sin(az),
+                                   cz]))
+
+    # Upper ring at elevation 45°
+    el = math.pi / 4.0
+    r_h = radius * math.cos(el)
+    z_off = radius * math.sin(el)
+    for i in range(n_upper):
+        az = 2.0 * math.pi * i / n_upper + math.pi / n_upper  # offset so not overlapping equator
+        positions.append(np.array([cx + r_h * math.cos(az),
+                                   cy + r_h * math.sin(az),
+                                   cz + z_off]))
+
+    return positions
+
+
+def make_cameras(
+    world,
+    prim_paths: list[str],
+    positions: list[list[float] | np.ndarray],
+    target: list[float] | np.ndarray,
+    fps: int = 30,
+    resolution: tuple[int, int] = (1280, 720),
+    warmup_frames: int = 15,
+) -> "list[Camera]":  # noqa: F821
+    """Create and initialize multiple cameras in one world.reset() call.
+
+    All cameras share the same target point. world.reset() is called once.
+
+    Args:
+        world: isaacsim.core.api.World instance.
+        prim_paths: USD prim paths, one per camera.
+        positions: World-space positions, one per camera.
+        target: Common look-at target for all cameras.
+        fps: Capture frequency.
+        resolution: (width, height) in pixels.
+        warmup_frames: Render steps before get_rgba() is valid.
+
+    Returns:
+        List of initialized Camera instances (same order as prim_paths).
+    """
+    from isaacsim.sensors.camera import Camera
+
+    tgt = np.asarray(target, dtype=float)
+    cameras = []
+
+    for path, pos_raw in zip(prim_paths, positions):
+        pos = np.asarray(pos_raw, dtype=float)
+        orientation = _lookat_quaternion(pos, tgt)
+        cam = Camera(prim_path=path, position=pos, frequency=fps, resolution=resolution)
+        cameras.append((cam, pos, orientation))
+
+    world.reset()
+
+    initialized = []
+    for cam, pos, orientation in cameras:
+        cam.initialize()
+        cam.set_world_pose(position=pos, orientation=orientation, camera_axes="world")
+        initialized.append(cam)
+
+    for _ in range(warmup_frames):
+        world.step(render=True)
+
+    return initialized
+
+
 def make_camera(
     world,
     prim_path: str,

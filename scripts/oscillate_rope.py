@@ -76,7 +76,7 @@ def main() -> None:
     import numpy as np
     from pxr import Gf, UsdGeom
 
-    from rope_sim.camera_utils import make_camera
+    from rope_sim.camera_utils import make_cameras, sphere_camera_positions
     from rope_sim.rope_builder import RopeBuilder, RopeConfig
     from rope_sim.sim_utils import clamp_dt, compute_joint_drive
 
@@ -145,29 +145,37 @@ def main() -> None:
             y = args.osc_amplitude * math.sin(osc_omega * t_osc)
         _translate_op.Set(Gf.Vec3d(_rest_pos[0], y, _rest_pos[2]))
 
-    # Register callback BEFORE make_camera (which calls world.reset()).
-    # world.reset() resets current_time to 0, so the callback sees t=0 from
-    # the very first warmup step — no sudden displacement at loop start.
+    # Register callback BEFORE make_cameras (which calls world.reset()).
     world.add_physics_callback("anchor_oscillate", lambda _: _update_anchor(world.current_time))
 
-    # Camera: same position as swing_rope.py
-    camera = make_camera(
+    # 6 cameras distributed on the camera sphere (4 equatorial + 2 upper)
+    _target = [0.0, 0.0, 0.4]
+    _radius = 3.59
+    cam_positions = sphere_camera_positions(radius=_radius, target=_target, n_equator=4, n_upper=2)
+    cam_prim_paths = [f"/World/RecordCam{i:02d}" for i in range(len(cam_positions))]
+    cameras = make_cameras(
         world,
-        prim_path="/World/RecordCam",
-        position=[3.5, 0.0, 1.2],
-        target=[0.0, 0.0, 0.4],
+        prim_paths=cam_prim_paths,
+        positions=cam_positions,
+        target=_target,
         fps=args.fps,
         resolution=(args.width, args.height),
     )
+    carb.log_warn(f"[oscillate] {len(cameras)} cameras initialized")
 
-    # After make_camera → world.reset(), re-fetch rest position (reset restores USD state).
+    # After make_cameras → world.reset(), re-fetch rest position.
     _rest_pos = _translate_op.Get()
 
-    from rope_sim.video_utils import default_output_path
+    # Base output stem (without extension); per-camera suffix appended later
+    if args.output:
+        out_base = Path(args.output).with_suffix("")
+    else:
+        _ts = time.strftime("%Y%m%d_%H%M%S")
+        _debug_dir = Path(__file__).resolve().parents[1] / "debug"
+        _debug_dir.mkdir(exist_ok=True)
+        out_base = _debug_dir / f"{_ts}_oscillate_rope"
 
-    out_path = Path(args.output) if args.output else default_output_path("_oscillate_rope")
-
-    snapshot_dir = out_path.parent / "snapshots"
+    snapshot_dir = Path(str(out_base)).parent / "snapshots"
     snapshot_dir.mkdir(exist_ok=True)
 
     # Recording loop
@@ -180,14 +188,13 @@ def main() -> None:
         f"[oscillate] {num_steps} steps, every {steps_per_frame} → "
         f"~{expected_frames} frames @ {args.fps}fps → {total_duration:.1f}s total"
     )
-    carb.log_warn(f"[oscillate] output: {out_path}")
+    carb.log_warn(f"[oscillate] output base: {out_base}_cam??.mp4")
 
-    frames: list[np.ndarray] = []
-    # positions_log[frame_idx] = array of shape (n_segments, 3) — world XYZ per segment
+    # frames_per_cam[i] = list of RGB arrays for camera i
+    frames_per_cam: list[list[np.ndarray]] = [[] for _ in cameras]
     positions_log: list[np.ndarray] = []
     sim_times: list[float] = []
 
-    # Cache USD translation ops for all segments (read world position each render step)
     seg_translate_ops = [
         UsdGeom.Xformable(p).GetOrderedXformOps()[0]
         for p in builder.segment_prims
@@ -200,11 +207,11 @@ def main() -> None:
         world.step(render=do_render)
 
         if do_render:
-            rgba = camera.get_rgba()
-            if rgba is not None and rgba.size > 0:
-                frames.append(rgba[:, :, :3].copy())
+            for i, cam in enumerate(cameras):
+                rgba = cam.get_rgba()
+                if rgba is not None and rgba.size > 0:
+                    frames_per_cam[i].append(rgba[:, :, :3].copy())
 
-            # Record all segment positions
             pos_frame = np.array([[*op.Get()] for op in seg_translate_ops], dtype=np.float32)
             positions_log.append(pos_frame)
             sim_times.append(world.current_time)
@@ -213,13 +220,14 @@ def main() -> None:
             t_sim = world.current_time
             t_wall = time.time() - wall_start
             carb.log_warn(
-                f"[oscillate] sim={t_sim:.1f}s  wall={t_wall:.1f}s  frames={len(frames)}"
+                f"[oscillate] sim={t_sim:.1f}s  wall={t_wall:.1f}s  "
+                f"frames_cam0={len(frames_per_cam[0])}"
             )
 
     wall_elapsed = time.time() - wall_start
-    carb.log_warn(f"[oscillate] done: {len(frames)} frames in {wall_elapsed:.1f}s wall")
+    carb.log_warn(f"[oscillate] done in {wall_elapsed:.1f}s wall")
 
-    if not frames:
+    if not any(frames_per_cam):
         carb.log_warn("[oscillate] no frames captured — skipping encode")
         simulation_app.close()
         return
@@ -228,12 +236,17 @@ def main() -> None:
     carb.log_warn("[oscillate] generating per-frame position plots ...")
     _save_position_plots(positions_log, sim_times, snapshot_dir, carb)
 
-    # ── MP4 encode ───────────────────────────────────────────────────────────
+    # ── MP4 encode (one file per camera) ─────────────────────────────────────
     from rope_sim.video_utils import encode_mp4
 
-    carb.log_warn(f"[oscillate] encoding {len(frames)} frames ...")
-    encode_mp4(frames, out_path, args.fps)
-    carb.log_warn(f"[oscillate] saved → {out_path}")
+    for i, frames in enumerate(frames_per_cam):
+        if not frames:
+            carb.log_warn(f"[oscillate] cam{i:02d}: no frames — skipped")
+            continue
+        out_path = Path(f"{out_base}_cam{i:02d}.mp4")
+        carb.log_warn(f"[oscillate] encoding cam{i:02d}: {len(frames)} frames → {out_path}")
+        encode_mp4(frames, out_path, args.fps)
+        carb.log_warn(f"[oscillate] cam{i:02d} saved → {out_path}")
 
     simulation_app.close()
 
