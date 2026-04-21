@@ -151,6 +151,8 @@ def main() -> None:
         add_default_lighting(stage)
     else:
         world.scene.add_default_ground_plane()
+        from rope_sim.scene_utils import add_camera_sphere
+        add_camera_sphere(stage)
 
     UsdGeom.Xform.Define(stage, "/World/Rope")
 

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from pxr import Gf, UsdGeom, UsdLux, UsdPhysics
+from pxr import Gf, Sdf, UsdGeom, UsdLux, UsdPhysics, UsdShade
 
 
 def add_invisible_ground(stage) -> None:
@@ -23,6 +23,32 @@ def add_default_lighting(stage) -> None:
     key.CreateIntensityAttr(4000.0)
     key.CreateAngleAttr(0.53)
     UsdGeom.Xformable(key.GetPrim()).AddRotateXYZOp().Set(Gf.Vec3f(-60.0, 30.0, 0.0))
+
+
+def add_camera_sphere(stage, radius: float = 3.59, opacity: float = 0.15) -> None:
+    """Add a semi-transparent reference sphere centered at the world origin.
+
+    The sphere is visual-only (no physics) and marks the approximate camera
+    distance (default 3.59 m = distance from [3.5, 0, 1.2] to [0, 0, 0.4]).
+    """
+    sphere = UsdGeom.Sphere.Define(stage, "/World/CameraSphere")
+    sphere.CreateRadiusAttr(radius)
+
+    mtl_path = "/World/Looks/CameraSphereMaterial"
+    material = UsdShade.Material.Define(stage, mtl_path)
+    shader = UsdShade.Shader.Define(stage, Sdf.Path(mtl_path).AppendPath("PreviewSurface"))
+    shader.CreateIdAttr("UsdPreviewSurface")
+    shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f).Set(Gf.Vec3f(0.2, 0.6, 1.0))
+    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(1.0)
+    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(0.0)
+    shader.CreateInput("opacity", Sdf.ValueTypeNames.Float).Set(opacity)
+    shader.CreateInput("ior", Sdf.ValueTypeNames.Float).Set(1.0)  # no refraction
+    shader.CreateInput("opacityThreshold", Sdf.ValueTypeNames.Float).Set(0.0)
+    material.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
+
+    sphere_prim = sphere.GetPrim()
+    UsdShade.MaterialBindingAPI.Apply(sphere_prim)
+    UsdShade.MaterialBindingAPI(sphere_prim).Bind(material)
 
 
 def setup_recording_world(simulation_app, physics_dt: float, fps: int):
