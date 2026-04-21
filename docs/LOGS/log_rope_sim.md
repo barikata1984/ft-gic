@@ -560,3 +560,41 @@ _run_record() 内で x0 再適用・コールバック登録
 | `oscillate_rope.py` | `20260420_085257_oscillate_rope.mp4` | 331 |
 
 全フレームでロープが画角内に収まり、暴れなし。
+
+---
+
+## 2026-04-21 — デフォルトパラメータ調整・clamp_dt の必要性検証
+
+### デフォルトパラメータの変遷と確定値
+
+segments=128 / fill_factor=0.1 を試みたが、`omega_n=42,780 rad/s` → `dt=0.0117ms` → 10s で 85万ステップとなり実用不可（数時間）。
+
+segments=64 / fill_factor=0.1 に変更後、`omega_n=10,695 rad/s` → `dt=0.047ms` → 約9分で完了。swing / oscillate とも正常録画を確認。
+
+fill_factor=0.2 を試みたが `omega_n=15,125 rad/s` → 約13分/本。
+
+**確定デフォルト: segments=64, fill_factor=0.1**（全4スクリプトに適用）
+
+| segments | fill_factor | omega_n [rad/s] | dt [ms] | 10s wall time |
+|---|---|---|---|---|
+| 25 | 0.3 | 2,827 | 0.177 | ~2分 |
+| 64 | 0.1 | 10,695 | 0.047 | ~9分 |
+| 64 | 0.2 | 15,125 | 0.033 | ~13分 |
+| 128 | 0.1 | 42,780 | 0.012 | 数時間 |
+
+### clamp_dt 無効化の実験
+
+`clamp_dt()` を無効化して dt=1/60s のまま swing_rope.py を実行した結果：
+- frame 0: 正常（垂直）
+- frame 75: S字波打ち（数値不安定の予兆）
+- frame 150: セグメントが画面全体に飛散（数値発散）
+- frame 225: 完全爆発、画面外まで吹き飛ぶ
+
+`clamp_dt` は `omega_n` に対して dt が500倍以上大きい場合に積分が即座に発散することを実証。必須の安全機構。
+
+### segments/fill_factor と dt の関係
+
+- `fill_factor` を上げる → `I_eff ∝ φ` → `omega_n ∝ sqrt(φ)` → dt 縮小
+- `segments` を増やす → `L_seg = L/N` 短縮 → `omega_n ∝ N^{3/2}` → dt 急激に縮小
+
+デフォルト dt=1/60s は `clamp_dt` により常に上記安定限界に切り下げられる。

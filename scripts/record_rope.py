@@ -34,14 +34,14 @@ def _build_parser() -> argparse.ArgumentParser:
     rope.add_argument("--rope-mass", type=float, default=0.1, metavar="KG")
     rope.add_argument("--youngs-modulus", type=float, default=1e9, metavar="PA",
                      help="Young's modulus E of the fibre material [Pa] (solid nylon ~1e9)")
-    rope.add_argument("--fill-factor", type=float, default=0.3, metavar="PHI",
+    rope.add_argument("--fill-factor", type=float, default=0.1, metavar="PHI",
                      help="Cross-section fill factor φ for twisted/braided rope (0–1). "
                           "I_eff = I_solid * φ. Typical nylon rope: 0.3–0.5")
     rope.add_argument("--poissons-ratio", type=float, default=0.35, metavar="NU")
     rope.add_argument("--damping-ratio", type=float, default=0.3, metavar="ZETA")
 
     sim = p.add_argument_group("simulation")
-    sim.add_argument("--segments", type=int, default=25)
+    sim.add_argument("--segments", type=int, default=64)
     sim.add_argument("--swing-limit", type=float, default=60.0, metavar="DEG")
     sim.add_argument("--anchor-height", type=float, default=0.8, metavar="M")
     sim.add_argument("--dt", type=float, default=1 / 60.0, metavar="S")
