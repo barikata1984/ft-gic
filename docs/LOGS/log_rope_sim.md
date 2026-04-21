@@ -598,3 +598,57 @@ fill_factor=0.2 を試みたが `omega_n=15,125 rad/s` → 約13分/本。
 - `segments` を増やす → `L_seg = L/N` 短縮 → `omega_n ∝ N^{3/2}` → dt 急激に縮小
 
 デフォルト dt=1/60s は `clamp_dt` により常に上記安定限界に切り下げられる。
+
+---
+
+## 2026-04-21 — カメラ球面・多視点録画（oscillate 6カメラ）
+
+### カメラ配置距離の確認
+
+標準カメラ配置 `[3.5, 0.0, 1.2]` → 注視点 `[0.0, 0.0, 0.4]` のユークリッド距離:
+
+```
+√(3.5² + 0.8²) = √12.89 ≈ 3.59 m
+```
+
+### 半透明カメラ球面の実装（`add_camera_sphere`）
+
+GUI モードでカメラ距離を可視化するため、原点中心・半径 3.59m の半透明球面を `scene_utils.py` に追加。
+
+**マテリアル設定（UsdPreviewSurface）:**
+- `diffuseColor`: 水色 (0.2, 0.6, 1.0)
+- `opacity`: 0.15
+- `ior`: 1.0（屈折ゼロ。デフォルト 1.5 では RTX Real-Time がレンズ効果を生成するため）
+- `roughness`: 1.0（鏡面ハイライトなし）
+- `opacityThreshold`: 0.0（連続的半透明）
+
+**重要な知見:** RTX Real-Time レンダラーは `ior` デフォルト値（1.5）を使って球面を屈折ガラスとして処理するため、`ior=1.0` を明示しなければレンズ効果（背景の歪み）が発生する。
+
+**物理参加なし:** `CollisionAPI` / `RigidBodyAPI` を適用しないことで純視覚オブジェクトとして定義。
+
+`hang_rope.py` の GUI モード（`--record` なし）のみで呼び出す。
+
+### 6カメラ多視点録画（`oscillate_rope.py`）
+
+**`camera_utils.py` への追加:**
+
+- `sphere_camera_positions(radius, target, n_equator, n_upper)` — 球面上の N 点座標を生成
+  - 赤道面: `n_equator` 台を等間隔配置（azimuth 0°, 90°, 180°, 270°）
+  - 上リング: 仰角 45°、`n_upper` 台を赤道から offset した角度に配置
+- `make_cameras(world, prim_paths, positions, target, ...)` — `world.reset()` 1回で全カメラを一括初期化
+  - 全 Camera prim を先に生成してから `world.reset()` → 順に `initialize()` + `set_world_pose()`
+  - ウォームアップ（15フレーム）は全カメラ共通で1回だけ実施
+
+**`oscillate_rope.py` 改修:**
+- `make_camera()` → `make_cameras()` に置き換え、6カメラを一括初期化
+- 録画ループで `frames_per_cam[i]` に各カメラのフレームを収集
+- エンコード: `<base>_cam00.mp4` 〜 `<base>_cam05.mp4` の6ファイルを出力
+
+**動作確認結果:**
+- 全6カメラで 330 フレームを正常取得
+- `debug/20260421_044752_oscillate_rope_cam00〜05.mp4`（477K〜654K）が生成済み
+
+### video_utils.py コーデック修正
+
+`avc1`（H.264）→ `mp4v` フォールバック時に `[ERROR] Encoder not found` が大量出力されていた。この環境の OpenCV は H.264 エンコーダーなし（`mp4v` / `XVID` / `MJPG` は使用可能）。
+`avc1` 試行を削除し、`mp4v` を直接使用するよう修正。

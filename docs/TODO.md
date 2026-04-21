@@ -41,8 +41,12 @@
 - [x] Y軸単振動録画スクリプト実装（`scripts/oscillate_rope.py`）
 - [x] スクリプト群のモジュール化リファクタリング
   - `src/rope_sim/sim_utils.py`: `compute_joint_drive()`（poissons_ratio 除去）、`clamp_dt()`
-  - `src/rope_sim/scene_utils.py`: `add_invisible_ground()`、`add_default_lighting()`、`setup_recording_world()`
+  - `src/rope_sim/scene_utils.py`: `add_invisible_ground()`、`add_default_lighting()`、`setup_recording_world()`、`add_camera_sphere()`
   - `src/rope_sim/video_utils.py`: `encode_mp4()`、`default_output_path()`
+  - `src/rope_sim/camera_utils.py`: `make_camera()`、`make_cameras()`、`sphere_camera_positions()`
+- [x] カメラ球面（半透明・半径3.59m）を scene_utils に実装し GUI モードで表示
+- [x] oscillate_rope.py を6カメラ対応に改修（球面上4赤道+2上方、全カメラがロープを向く）
+- [x] video_utils.py のコーデックを avc1 優先から mp4v 直接指定に修正
 - [ ] ねじり剛性の物理実装（`poissons_ratio` を有効活用）
   - `G = E / (2(1+ν))`、`J_eff = (π·r⁴/2)·φ`、`k_torsion = G·J_eff/L_seg`
   - `rope_builder.py` の rotZ DriveAPI `stiffness` に `k_torsion` を設定
