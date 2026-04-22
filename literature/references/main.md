@@ -1316,3 +1316,23 @@ Yunzhu Li, Boyuan Chen, et al. — CoRL, 2024
 
 > 点群・SDF 等の 3D 形状表現をポリシー入力とした変形体操作ポリシー。2D 画像に対し 3D 形状特徴を直接活用して目標形状への汎化性を改善。
 
+---
+
+### Chen2024_DEFORM
+
+**Differentiable Discrete Elastic Rods for Real-Time Modeling of Deformable Linear Objects**
+Yizhou Chen, Yiting Zhang, Zachary Brei, Tiancheng Zhang, Yuzhen Chen, Julie Wu, Ram Vasudevan — CoRL, 2024
+[arXiv:2406.05931](https://arxiv.org/abs/2406.05931)
+
+> DER を完全微分可能化（DDER）し残差ニューラルネットワークと組み合わせたリアルタイム DLO 動力学モデル DEFORM。ARMOUR 軌道計画器と統合し、ロープの 3D 形状マッチング操作を実機 2 ロボット環境で実証した、DER ベース動的操作計画の実機実証として重要な参照。
+
+---
+
+### Chen2025_DEFT
+
+**DEFT: Differentiable Branched Discrete Elastic Rods for Modeling Furcated DLOs in Real-Time**
+Yizhou Chen, Xiaoyue Wu, Yeheng Zong, Yuzhen Chen, Anran Li, Bohao Zhang, Ram Vasudevan — arXiv, 2025
+[arXiv:2502.15037](https://arxiv.org/abs/2502.15037)
+
+> DEFORM を分岐 DLO（Y 字・多分岐ケーブル）に拡張した DEFT。分岐点での力相互作用を明示的にモデル化し、スレッド挿入タスクで 29/35 の成功率を実機実証。接触・摩擦モデリングの欠如が著者自身の limit として記録されている。
+
