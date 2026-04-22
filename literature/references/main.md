@@ -488,16 +488,6 @@ DOI: `10.1109/ICRA48891.2023.10161505`
 
 ---
 
-### Shentu2024_FRASIER
-
-**FRASIER: Fast Real-time Autonomous Swinging through the Environment by Rope**
-Muchen Sun, Péter Englert, et al. — RSS, 2024
-[arXiv:2405.14534](https://arxiv.org/abs/2405.14534)
-
-> DER を内部モデルとした 500Hz MPC によるロープ動的スウィング操作。準静的を超えた DLO 動的制御の実機実証。
-
----
-
 ### Jin2022_DLORouting
 
 **Robotic Cable Routing with Reinforcement Learning**
@@ -771,16 +761,6 @@ Yixuan Lv, et al. — ICRA, 2023
 DOI: `10.1109/ICRA48891.2023.10161505`
 
 > RGB-D 点群からスプライン曲線への DLO リアルタイムフィッティング。時間的一貫性を活用したロバスト追跡パイプライン。
-
----
-
-### Shentu2024_FRASIER
-
-**FRASIER: Fast Real-time Autonomous Swinging through the Environment by Rope**
-Muchen Sun, Péter Englert, et al. — RSS, 2024
-[arXiv:2405.14534](https://arxiv.org/abs/2405.14534)
-
-> DER を内部モデルとした 500Hz MPC によるロープ動的スウィング操作。準静的を超えた DLO 動的制御の実機実証。
 
 ---
 
