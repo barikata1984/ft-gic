@@ -33,7 +33,7 @@
 
 **Building Block 1: 微分可能物理シミュレーション (Differentiable Physics Simulation)**
 
-最も広く共有される技術的基盤は、シミュレーション全体を通じた勾配逆伝播を可能にする微分可能物理エンジンである。Hu2020_DiffTaichiはソースコード変換とテープによる二段階微分を提供し、後続研究の根幹を成す。これを継承してHuang2021_PlasticineLab はVon Mises降伏を含む弾塑性MPMを微分可能化し、Yang2024_DPSI・Chen2026_EMPM・Yang2025_DDBot はそれぞれ実ロボット実験での材料同定に適用した。布・薄板系ではWang2024_ThinShellLab・Zheng2024_DiffCPが独自の微分可能定式化を採用し、変形線形物体 (Deformable Linear Object; DLO) 系ではCheng2024_DEFORMがPyTorchによる微分可能離散弾性ロッド (Discrete Elastic Rods; DER) を実装した。損失関数としてChamfer距離・Earth Mover's Distance (EMD)・測光ロスが共通して用いられる。
+最も広く共有される技術的基盤は、シミュレーション全体を通じた勾配逆伝播を可能にする微分可能物理エンジンである。Hu2020_DiffTaichiはソースコード変換とテープによる二段階微分を提供し、後続研究の根幹を成す。これを継承してHuang2021_PlasticineLab はVon Mises降伏を含む弾塑性MPMを微分可能化し、Yang2024_DPSI・Chen2026_EMPM・Yang2025_DDBot はそれぞれ実ロボット実験での材料同定に適用した。布・薄板系ではWang2024_ThinShellLab・Zheng2024_DiffCPが独自の微分可能定式化を採用し、線形柔軟物 (Deformable Linear Object; DLO) 系ではCheng2024_DEFORMがPyTorchによる微分可能離散弾性ロッド (Discrete Elastic Rods; DER) を実装した。損失関数としてChamfer距離・Earth Mover's Distance (EMD)・測光ロスが共通して用いられる。
 
 **Building Block 2: 3Dガウシアンスプラッティング (3DGS) による形状・動態表現**
 
