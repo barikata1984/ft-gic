@@ -184,27 +184,6 @@ Zheng2025_PIDGは数時間から数日の計算時間を要し、Scheikl2023_Rea
 
 実ロボット実験を含む論文が全体の60%超を占め、特に2024年以降は純粋なシミュレーション研究よりも実環境実証を伴う研究が主流となっている。
 
-#### Concept Matrix
-
-| Concept | Diff-Physics/MPM | 3DGS-Physics | Spring-mass/Hybrid | Cloth/ThinShell | DLO | Tactile/Sensing | Sim-to-Real/Task | Neural Dynamics | Benchmarks |
-|---|---|---|---|---|---|---|---|---|---|
-| E/Young's modulus estimation | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — | — | — |
-| Poisson's ratio estimation | ✓ | ✓ | ✓ | ✓ | — | — | — | — | — |
-| Mass estimation | ✓ | ✓ | — | — | — | ✓ | — | — | — |
-| Friction estimation | ✓ | — | — | ✓ | — | — | ✓ | — | — |
-| Real robot task demo | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | — |
-| Online/adaptive estimation | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | ✓ | — |
-| Sim-to-real transfer | ✓ | — | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ |
-| Uncertainty quantification | — | ✓ | — | ✓ | — | — | — | — | — |
-| Cloth | — | — | ✓ | ✓ | — | — | ✓ | — | ✓ |
-| DLO | — | — | — | — | ✓ | — | — | — | — |
-| Granular/elastoplastic | ✓ | — | — | — | — | — | — | ✓ | ✓ |
-| 3DGS representation | — | ✓ | ✓ | — | — | — | — | ✓ | — |
-| MPM simulation | ✓ | ✓ | ✓ | ✓ | — | ✓ | — | ✓ | ✓ |
-| Spring-mass / FEM | — | — | ✓ | ✓ | — | ✓ | — | — | — |
-| Neural dynamics | — | ✓ | — | — | ✓ | — | — | ✓ | — |
-
----
 
 ## Paper Catalogue
 
