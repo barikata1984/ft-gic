@@ -21,7 +21,7 @@
 
 ### Thesis（フィールドの根本的な未解決問題）
 
-変形可能物体の物理特性推定が本質的に困難である理由は、まず「観測可能性と推定可能性の乖離」という根本的な問題に起因する。変形挙動は質量・ヤング率・ポアソン比・摩擦係数・粘性などの複数パラメータの非線形結合として現れるが、実際にロボットが観測できるのはRGB-D映像や力センサの時系列信号に過ぎない。この逆問題は本質的に不良設定（ill-posed）であり、同一の観測から異なるパラメータセットが等価な挙動を生成しうる。Yang2024_DPSIはこれを「鞍点問題」として明示し、Li2023_PACNeRFは既知の物体形状を仮定せずに幾何形状と物理パラメータを同時に推定することがいかに困難かを示した。Patni2024_OnlineElasticityは標準的な平行グリッパを用いた場合、絶対値としてのヤング率回復には装置間で2倍以上の誤差が生じることを実証し、「相対的識別は可能でも絶対推定は困難」という現実を定量的に示している。
+変形可能物体の物理特性推定が本質的に困難である理由は、まず「観測可能性と推定可能性の乖離」という根本的な問題に起因する。変形挙動は質量・ヤング率・ポアソン比・摩擦係数・粘性などの複数パラメータの非線形結合として現れるが、実際にロボットが観測できるのはRGB-深度 (RGB-D) 映像や力センサの時系列信号に過ぎない。この逆問題は本質的に不良設定（ill-posed）であり、同一の観測から異なるパラメータセットが等価な挙動を生成しうる。Yang2024_DPSIはこれを「鞍点問題」として明示し、Li2023_PACNeRFは既知の物体形状を仮定せずに幾何形状と物理パラメータを同時に推定することがいかに困難かを示した。Patni2024_OnlineElasticityは標準的な平行グリッパを用いた場合、絶対値としてのヤング率回復には装置間で2倍以上の誤差が生じることを実証し、「相対的識別は可能でも絶対推定は困難」という現実を定量的に示している。
 
 第二の根本問題は「シミュレーションモデルと現実の構成則の乖離」である。MPM・FEM・バネ質点系などの物理シミュレータは、均質・等方・連続体という仮定のもとで動作するが、実際の変形物体（外科組織・布・ロープ・食品）は不均質・異方性・粘弾塑性的な挙動を示す。ThinShellLab（Wang2024）は曲げ剛性と塑性を同時にモデル化しなければ薄板の操作が再現できないことを示し、Li2024_BayesianDiffPhysicsは空間的に不均質なパラメータ分布をベイズ推定で扱う必要性を論じた。Scheikl2023_RealtoSimは残差写像とオンライン剛性最適化の組み合わせなしには手術組織のsim-to-real転移が成立しないことを示しており、いかなる単一の物理モデルも実世界の複雑性を完全にカバーできないことを示唆する。
 
@@ -33,23 +33,23 @@
 
 **Building Block 1: 微分可能物理シミュレーション (Differentiable Physics Simulation)**
 
-最も広く共有される技術的基盤は、シミュレーション全体を通じた勾配逆伝播を可能にする微分可能物理エンジンである。Hu2020_DiffTaichiはソースコード変換とテープによる二段階微分を提供し、後続研究の根幹を成す。これを継承してHuang2021_PlasticineLab はVon Mises降伏を含む弾塑性MPMを微分可能化し、Yang2024_DPSI・Chen2026_EMPM・Yang2025_DDBot はそれぞれ実ロボット実験での材料同定に適用した。布・薄板系ではWang2024_ThinShellLab・Zheng2024_DiffCPが独自の微分可能定式化を採用し、DLO系ではCheng2024_DEFORMがPyTorchによる微分可能離散弾性ロッドを実装した。損失関数としてChamfer距離・Earth Mover's Distance・測光ロスが共通して用いられる。
+最も広く共有される技術的基盤は、シミュレーション全体を通じた勾配逆伝播を可能にする微分可能物理エンジンである。Hu2020_DiffTaichiはソースコード変換とテープによる二段階微分を提供し、後続研究の根幹を成す。これを継承してHuang2021_PlasticineLab はVon Mises降伏を含む弾塑性MPMを微分可能化し、Yang2024_DPSI・Chen2026_EMPM・Yang2025_DDBot はそれぞれ実ロボット実験での材料同定に適用した。布・薄板系ではWang2024_ThinShellLab・Zheng2024_DiffCPが独自の微分可能定式化を採用し、変形線形物体 (Deformable Linear Object; DLO) 系ではCheng2024_DEFORMがPyTorchによる微分可能離散弾性ロッド (Discrete Elastic Rods; DER) を実装した。損失関数としてChamfer距離・Earth Mover's Distance (EMD)・測光ロスが共通して用いられる。
 
 **Building Block 2: 3Dガウシアンスプラッティング (3DGS) による形状・動態表現**
 
-視覚的リアリティと物理演算の橋渡しとして、3DGSが急速に標準表現として台頭している。Xie2023_PhysGaussianはガウシアン核に変形勾配とストレステンソルを付加し、MPM時間発展と連動させる「WS2原理」を提案した。これを発展させたのがLiu2024_Physics3D（粘弾性）・Wang2025_OmniPhysGS（12構成則自動選択）・Li2025_PhysGS（ベイズ不確実性）・Zheng2025_PIDG（単眼動画対応）であり、ロボット操作文脈ではZheng2025_PhysTwin・Zhang2025_Real2SimSoft・Chen2026_EMPM・Huang2026_SoMAが3DGSをデジタルツインのレンダリング層として採用した。
+視覚的リアリティと物理演算の橋渡しとして、3DGSが急速に標準表現として台頭している。Xie2023_PhysGaussianはガウシアン核に変形勾配とストレステンソルを付加し、MPM時間発展と連動させる「見たものをシミュレートする (What You See is What You Simulate; WS2) 原理」を提案した。これを発展させたのがLiu2024_Physics3D（粘弾性）・Wang2025_OmniPhysGS（12構成則自動選択）・Li2025_PhysGS（ベイズ不確実性）・Zheng2025_PIDG（単眼動画対応）であり、ロボット操作文脈ではZheng2025_PhysTwin・Zhang2025_Real2SimSoft・Chen2026_EMPM・Huang2026_SoMAが3DGSをデジタルツインのレンダリング層として採用した。
 
 **Building Block 3: ベイズ推定とハイブリッド最適化 (Bayesian Inference & Hybrid Optimization)**
 
-決定論的な勾配降下だけでは局所最適やノイズに対して脆弱なため、グローバル探索とローカル精緻化を組み合わせるハイブリッド戦略が重要な基盤として確立されている。Yoon2025_RealtoSimClothはBO＋勾配降下で4パラメータを同定し、Li2024_BayesianDiffPhysicsは変分推論で空間的不均質性を捉えた。Lin2024_AdaptiGraphはBO/CMA-ESによるオンライン逆最適化を展開時に実行し、Li2025_PhysGSはDirichlet-Categorical事前分布と正規-逆ガンマ事前分布による閉形式事後推定で質量22.8%・硬度61.2%の精度改善を達成した。
+決定論的な勾配降下だけでは局所最適やノイズに対して脆弱なため、グローバル探索とローカル精緻化を組み合わせるハイブリッド戦略が重要な基盤として確立されている。Yoon2025_RealtoSimClothはベイズ最適化 (Bayesian Optimization; BO)＋勾配降下で4パラメータを同定し、Li2024_BayesianDiffPhysicsは変分推論で空間的不均質性を捉えた。Lin2024_AdaptiGraphはBO/共分散行列適応進化戦略 (Covariance Matrix Adaptation Evolution Strategy; CMA-ES) によるオンライン逆最適化を展開時に実行し、Li2025_PhysGSはDirichlet-Categorical事前分布と正規-逆ガンマ事前分布による閉形式事後推定で質量22.8%・硬度61.2%の精度改善を達成した。
 
 **Building Block 4: sim-to-realドメインランダム化と残差補正 (Domain Randomization & Residual Correction)**
 
-Matas2018_SimtoRealはDDPGへの9改良とドメインランダム化の組み合わせでゼロショット転移を初めて実証し、Zhao2025_StressGuidedRLは内部応力ペナルティによる穏やかな操作の学習と転移を示した。Scheikl2023_RealtoSimはChamfer距離ベースの残差写像とオンライン剛性最適化の併用で手術組織の精密操作を実現した。Huang2023_DERはDERモデルの高精度化によりリアルデータ不要のゼロショット転移（76.7%成功率）を達成した。
+Matas2018_SimtoRealは深層決定論的方策勾配法 (Deep Deterministic Policy Gradient; DDPG) への9改良とドメインランダム化の組み合わせでゼロショット転移を初めて実証し、Zhao2025_StressGuidedRLは内部応力ペナルティによる穏やかな操作の学習と転移を示した。Scheikl2023_RealtoSimはChamfer距離ベースの残差写像とオンライン剛性最適化の併用で手術組織の精密操作を実現した。Huang2023_DERはDERモデルの高精度化によりリアルデータ不要のゼロショット転移（76.7%成功率）を達成した。
 
 **Building Block 5: ポイントクラウド・粒子系の観測モデリング (Point Cloud / Particle Observation)**
 
-Yang2024_DPSIはノイズのある実ポイントクラウドに対してChamfer+EMD損失を直接適用し、Li2023_PACNeRFはNeRFのボクセル表現からMPM粒子への変換器を導入した。DiPac2024_DifferentiableParticlesは単一の粒子ベースフレームワークでロープ・布・粒状体・液体を統一的に扱い、Shi2025_PhysWorldはMPMデジタルツインから合成データを生成してGNNワールドモデルを47倍高速化した。
+Yang2024_DPSIはノイズのある実ポイントクラウドに対してChamfer+EMD損失を直接適用し、Li2023_PACNeRFはニューラル輝度場 (Neural Radiance Field; NeRF) のボクセル表現からMPM粒子への変換器を導入した。DiPac2024_DifferentiableParticlesは単一の粒子ベースフレームワークでロープ・布・粒状体・液体を統一的に扱い、Shi2025_PhysWorldはMPMデジタルツインから合成データを生成してGNNワールドモデルを47倍高速化した。
 
 ---
 
@@ -213,7 +213,7 @@ Zheng2025_PIDGは数時間から数日の計算時間を要し、Scheikl2023_Rea
 **A1. Yang2024_DPSI**  
 Xintong Yang, Ze Ji, Yu-Kun Lai. "Differentiable Physics-based System Identification for Robotic Manipulation of Elastoplastic Materials." *International Journal of Robotics Research*, 2025.  
 arXiv: 2411.00554 | DOI: 10.1177/02783649251334661  
-- **thesis**: 弾塑性材料（ヤング率・ポアソン比・降伏応力・摩擦）は最小限の実ロボット接触からnoisy点群に対するChamfer+EMD損失を通じた微分可能MLS-MPMで信頼性高く同定できる
+- **thesis**: 弾塑性材料（ヤング率・ポアソン比・降伏応力・摩擦）は最小限の実ロボット接触からnoisy点群に対するChamfer+EMD損失を通じた微分可能移動最小二乗MPM (Moving Least Squares MPM; MLS-MPM) で信頼性高く同定できる
 - **core**: DiffTaiChiによる微分可能MLS-MPM; Chamfer距離とEarth Mover's Distance損失の組み合わせ
 - **diff**: GradSim・PAC-NeRFが合成完全映像を前提とするのに対し、ノイズのある実点群に直接適用
 - **limit**: 鞍点問題; 接触領域のシャープな変形; 変位後の粒子浮遊
@@ -254,7 +254,7 @@ arXiv: 2104.02646
 Yuanming Hu, Luke Anderson, Tzu-Mao Li, et al. "DiffTaichi: Differentiable Programming for Physical Simulation." *ICLR 2020*.  
 arXiv: 1910.00935  
 - **thesis**: 物理シミュレータはメガカーネル・命令型並列性・任意インデックスを尊重した専用ADを必要とする
-- **core**: イントラカーネル微分のソースコード変換＋エンドツーエンドバックプロパゲーションのテープによる二段階微分
+- **core**: イントラカーネル微分のソースコード変換＋エンドツーエンドバックプロパゲーションのテープによる二段階自動微分 (Automatic Differentiation; AD)
 - **diff**: TF/PyTorch/JAX（GPU kernel起動過多）と手書きCUDA（手動勾配誘導）の中間を自動化
 - **limit**: 接触不連続での誤導勾配; 平坦な損失ランドスケープと局所最小値
 
@@ -262,7 +262,7 @@ arXiv: 1910.00935
 Zhiao Huang, Yuanming Hu, Tao Du, et al. "PlasticineLab: A Soft-Body Manipulation Benchmark with Differentiable Physics." *ICLR 2021*.  
 arXiv: 2104.03311  
 - **thesis**: 微分可能弾塑性シミュレーションは勾配ベース最適化でRLでは不可能なソフトボディ操作タスクを解けるが、多段タスクには失敗する
-- **core**: 微分可能MLS-MPM＋Von Mises降伏（微分可能SVD）＋ソフト化接触モデル; 10シナリオ50設定のベンチマーク
+- **core**: 微分可能MLS-MPM＋Von Mises降伏（微分可能特異値分解 (Singular Value Decomposition; SVD)）＋ソフト化接触モデル; 10シナリオ50設定のベンチマーク
 - **diff**: ChainQueen・DiffTaichiに塑性と包括的タスク評価を追加
 - **limit**: 離着接を伴う多段タスクでの失敗; 初期値感度; sim-to-real未探索
 
@@ -270,8 +270,8 @@ arXiv: 2104.03311
 Xintong Yang, Minglun Wei, Yu-Kun Lai, Ze Ji. "DDBot: Differentiable Physics-based Digging Robot for Unknown Granular Materials." *IEEE Transactions on Robotics*, 2025.  
 arXiv: 2510.17335 | DOI: 10.1109/TRO.2025.3636815  
 - **thesis**: Drucker-Prager塑性付き微分可能MLS-MPMにより未知粒状材料のE・ν・密度・摩擦角を同時回復し、少サンプルで掘削スキルを最適化できる
-- **core**: 完全微分可能MLS-MPM（StVK弾性＋Drucker-Prager塑性）＋勾配安定化（クリッピング・ダイナミックスケーリング・正規化）＋直線探索
-- **diff**: GNN・CMA-MAE・深層RLに対し微分可能物理で4パラメータを少サンプルで回復
+- **core**: 完全微分可能MLS-MPM（サン・ブナン・キルヒホッフ弾性 (Saint Venant-Kirchhoff; StVK) ＋Drucker-Prager塑性）＋勾配安定化（クリッピング・ダイナミックスケーリング・正規化）＋直線探索
+- **diff**: グラフニューラルネットワーク (Graph Neural Network; GNN)・CMA-MAE・深層強化学習 (Reinforcement Learning; RL) に対し微分可能物理で4パラメータを少サンプルで回復
 - **limit**: 小規模高精度掘削に限定; 局所最適
 
 **A9. Liu2024_SoftMAC**  
@@ -298,7 +298,7 @@ arXiv: 2311.12198 | DOI: 10.1109/CVPR52733.2024.00420
 Fangfu Liu, Hanyang Wang, Shunyu Yao, et al. "Physics3D: Learning Physical Properties of 3D Gaussians via Video Diffusion." *arXiv preprint*, 2024.  
 arXiv: 2406.04338  
 - **thesis**: ビデオ拡散モデルの運動事前分布を蒸留することで実計測なしに3DGSの質量・ラメ定数・粘性を推定できる
-- **core**: 弾性成分と粘弾性成分を独立分解する粘弾性MPM; Stable Video DiffusionへのScore Distillation Sampling
+- **core**: 弾性成分と粘弾性成分を独立分解する粘弾性MPM; Stable Video Diffusionへのスコア蒸留サンプリング (Score Distillation Sampling; SDS)
 - **diff**: PhysDreamer（弾性のみ）・PhysGaussian（低周波不自然挙動）に対し弾性＋粘性を同時モデル化
 - **limit**: 絡み合いが多いシーンでは手動介入が必要
 
@@ -306,7 +306,7 @@ arXiv: 2406.04338
 Yuchen Lin, Chenguo Lin, Jianjin Xu, Yadong Mu. "OmniPhysGS: 3D Constitutive Gaussians for General Physics-Based Dynamics Generation." *ICLR 2025*.  
 arXiv: 2501.18982  
 - **thesis**: 12専門家構成モデルのアンサンブルから自動選択することで手動材料指定なしに異種物理動態を生成できる
-- **core**: 物理誘導NNが12構成モデルをGaussianごとに選択・ブレンド; ビデオ拡散モデルへのSDS; グループ化マルチバッチ最適化
+- **core**: 物理誘導ニューラルネット (Neural Network; NN) が12構成モデルをGaussianごとに選択・ブレンド; ビデオ拡散モデルへのSDS; グループ化マルチバッチ最適化
 - **diff**: PhysGaussian・PhysDreamer（手動チューニング必要）・Physics3D（単一固定構成モデル）に対し材料選択自動化
 - **limit**: 代表的材料のみカバー; シーンごとの最適化が遅い
 
@@ -314,9 +314,9 @@ arXiv: 2501.18982
 Xutao Li, Yiming Ji, et al. "PhysGS: Bayesian-Inferred Gaussian Splatting for Physical Property Estimation." *arXiv*, 2025.  
 arXiv: 2511.18570  
 - **thesis**: 3DGSのベイズ推論により多様な実物体の物性（摩擦・剛性・硬度・密度・質量）を原理的な不確実性定量化とともに推定できる
-- **core**: Dirichlet-Categorical材料ラベルモデル＋Normal-Inverse-Gamma連続物性事前分布; 閉形式事後更新; VLM事前分布との融合
+- **core**: Dirichlet-Categorical材料ラベルモデル＋Normal-Inverse-Gamma連続物性事前分布; 閉形式事後更新; 視覚言語モデル (Vision-Language Model; VLM) 事前分布との融合
 - **diff**: NeRF2Physics（決定論的点推定）に対し校正済み不確実性を提供; 質量22.8%・硬度61.2%・摩擦18.1%の誤差低減
-- **limit**: SAMセグメンテーション品質に敏感; 雑然とした屋外シーンでノイズが増加
+- **limit**: セグメント・エニシング・モデル (Segment Anything Model; SAM) のセグメンテーション品質に敏感; 雑然とした屋外シーンでノイズが増加
 
 **B5. Zheng2025_PIDG**  
 Zhenwei Shi, Yurui Chen, et al. "Physics-Informed Deformable Gaussian Splatting." *AAAI 2026*.  
@@ -330,7 +330,7 @@ arXiv: 2511.06299
 Jad Abou-Chakra, Krishan Rana, Feras Dayoub, Niko Sünderhauf. "Physically Embodied Gaussian Splatting: A Realtime Correctable World Model for Robotics." *CoRL 2024*.  
 arXiv: 2406.10788  
 - **thesis**: PBD物理予測と3DGSとを継続的な視覚力補正でリアルタイム（30Hz）閉ループ接続することでロボティクス向け補正可能なワールドモデルを構築できる
-- **core**: 粒子-Gaussianデュアル表現; PBDが将来状態を予測; Adam最適化測光損失による視覚力でリアル追従
+- **core**: 粒子-Gaussianデュアル表現; 位置ベースダイナミクス (Position-Based Dynamics; PBD) が将来状態を予測; Adam最適化測光損失による視覚力でリアル追従
 - **diff**: PBD＋3DGSを組み合わせたリアルタイム閉ループ補正は先行研究なし
 - **limit**: ロープの小画素フットプリントで補正力が不安定; 対称・無模様物体での定常追跡誤差
 
@@ -350,7 +350,7 @@ arXiv: 2503.17973
 Kaifeng Zhang, Shuo Sha, Hanxiao Jiang, et al. "Real-to-Sim Robot Policy Evaluation with Gaussian Splatting Simulation of Soft-Body Interactions." *arXiv*, 2025.  
 arXiv: 2511.04665  
 - **thesis**: 3DGSレンダリングとバネ質点デジタルツインで構築したシミュレートされたロールアウトは実世界実行性能と強い相関（r>0.9）を持ち政策評価のプロキシとして機能する
-- **core**: PhysTwinフレームワークによるバネ質点パラメータ最適化＋NVIDIA Warpエンジン＋線形ブレンドスキニング; Pearson r>0.9（IsaacLab: r=0.237-0.649と比較）
+- **core**: PhysTwinフレームワークによるバネ質点パラメータ最適化＋NVIDIA Warpエンジン＋線形ブレンドスキニング (Linear Blend Skinning; LBS); Pearson r>0.9（IsaacLab: r=0.237-0.649と比較）
 - **diff**: SIMPLER・RobotArena∞・Ctrl-World・Real-is-Sim（剛体のみ）に対しr>0.9の変形物体シミュレーション
 - **limit**: 残留外観・ダイナミクス不一致; 3タスク1ロボットプラットフォームへの評価限定
 
@@ -378,7 +378,7 @@ arXiv: 2404.00451
 Dongzhe Zheng, Siqiong Yao, Wenqiang Xu, Cewu Lu. "Differentiable Cloth Parameter Identification and State Estimation in Manipulation." *IEEE RA-L*, 2024.  
 arXiv: 2311.05141 | DOI: 10.1109/LRA.2024.3355731  
 - **thesis**: 布操作は物理パラメータ（E・ν・せん断・接触剛性）と布状態をRGB-Dから同時回復する必要がある
-- **core**: MPM＋異方性弾塑性（AEP）構成モデルを用いたDiffCP微分パイプライン; 幾何分散最小化による勾配降下でパラメータと姿勢を同時最適化
+- **core**: MPM＋異方性弾塑性 (Anisotropic Elasto-Plastic; AEP) 構成モデルを用いたDiffCP微分パイプライン; 幾何分散最小化による勾配降下でパラメータと姿勢を同時最適化
 - **diff**: 等方性Neo-Hookean布手法に対しAEPで異方性対応; 接触を陰的に処理し関節ポーズ＋パラメータ最適化
 - **limit**: センサ不精度による実-シム差異; 微分可能MPMの高メモリ要求
 
@@ -406,7 +406,7 @@ DOI: 10.1093/jcde/qwae069
 Mingen Li, Changhyun Choi. "Learning for Deformable Linear Object Insertion Leveraging Flexibility Estimation from Visual Cues." *ICRA 2024*.  
 arXiv: 2410.23428 | DOI: 10.1109/ICRA57147.2024.10610419  
 - **thesis**: DLO挿入には各物体の柔軟性に条件付けられたタスクポリシーが必要; GNNによる曲率ベース柔軟性推定で材料を跨いだ汎化が可能
-- **core**: シミュレーションデータ訓練のGNN柔軟性推定器→柔軟性条件付きSACポリシー（運動プリミティブ付き）; 追加ポリシー訓練なしのsim-to-real
+- **core**: シミュレーションデータ訓練のGNN柔軟性推定器→柔軟性条件付きソフト・アクター・クリティック (Soft Actor-Critic; SAC) ポリシー（運動プリミティブ付き）; 追加ポリシー訓練なしのsim-to-real
 - **diff**: 剛体モデルや実データを必要とする先行DLO手法（Lv, Scheikl）に対しデモデータ不要で材料適応
 - **limit**: 高い挿入角度での成功率急落; センサノイズ; 平面挿入仮定
 
@@ -414,7 +414,7 @@ arXiv: 2410.23428 | DOI: 10.1109/ICRA57147.2024.10610419
 Z. Huang et al. "Accurate Simulation and Parameter Identification of Deformable Linear Objects using Discrete Elastic Rods." *IROS 2025*.  
 arXiv: 2310.00911 | DOI: 10.1109/IROS60139.2025.11247160  
 - **thesis**: 物理的に正確なDER（曲げ・ねじり剛性を個別にパラメータ化）ベースのシミュレーションにより実ロボットデータ不要のゼロショット動的ワイヤ操作転移が可能
-- **core**: DERをMuJoCoシミュレータに統合＋PPOによるポリシー学習; 2mワイヤのフリック操作で76.7%の実成功率
+- **core**: DERをMuJoCoシミュレータに統合＋近位方策最適化 (Proximal Policy Optimization; PPO) によるポリシー学習; 2mワイヤのフリック操作で76.7%の実成功率
 - **diff**: 実訓練データに依存する先行動的DLO手法に対しシミュレーション精度向上でデータ不要の転移
 - **limit**: 関節コントローラの軌跡忠実度ギャップ; ワイヤパラメータ変動に敏感（細いワイヤで10%成功率）; 摩擦モデリング不完全
 
@@ -429,7 +429,7 @@ arXiv: 2406.05931
 **E4. Ying2024_ObstacleAvoidanceDLO**  
 C. Ying, K. Yamazaki. "Obstacle Avoidance Shape Control of DLOs with Online Parameters Adaptation Based on Differentiable Simulation." *ROBOMECH Journal*, 2024.  
 DOI: 10.1186/s40648-024-00283-1  
-- **thesis**: 微分可能シミュレーション＋MPC＋オンラインパラメータ適応により事前訓練データなしで任意材料特性のDLOの障害物回避形状制御が可能
+- **thesis**: 微分可能シミュレーション＋モデル予測制御 (Model Predictive Control; MPC)＋オンラインパラメータ適応により事前訓練データなしで任意材料特性のDLOの障害物回避形状制御が可能
 - **core**: 前向きシミュレーションと勾配バックプロパゲーションをサポートするDLOモデル; MPCループ内の行動予測ニューラルネット; オンライン剛性適応
 - **diff**: 事前収集訓練データと手設計コントローラを必要とする学習ベース手法に対しオフラインデータ不要で障害物拘束を扱う
 - **limit**: オンライン適応はsim-to-realギャップを完全には閉じない
@@ -451,7 +451,7 @@ J. Lloyd et al. "Learning Object Compliance via Young's Modulus from Single Gras
 arXiv: 2406.15304  
 - **thesis**: Hertz接触理論の解析的推定値と触覚画像特徴を融合した多タワーNNにより単一把持で5桁の範囲にわたるヤング率推定が可能
 - **core**: Hertz接触理論＋弾性力学に基づく解析推定値＋触覚画像特徴＋把持計測値を融合した多タワーNN; 285物体で74.2%（1オーダー以内）
-- **diff**: Shore硬度（軟質のみ）・LLM（二値識別）・純解析手法（幾何変動に脆弱）に対し触覚把持から材料を跨ぐヤング率推定を初めて実現
+- **diff**: Shore硬度（軟質のみ）・大規模言語モデル (Large Language Model; LLM)（二値識別）・純解析手法（幾何変動に脆弱）に対し触覚把持から材料を跨ぐヤング率推定を初めて実現
 - **limit**: 剛体間（プラスチックvs金属）の識別が困難; Hertz球面接触仮定の誤差; センサ分解能の限界
 
 **F3. Chen2024_PropriocepEstimation**  
@@ -474,7 +474,7 @@ arXiv: 2210.03701
 S. Chen et al. "DiffTactile: A Physics-based Differentiable Tactile Simulator for Contact-Rich Robotic Manipulation." *ICLR 2024*.  
 arXiv: 2403.08716  
 - **thesis**: FEMベースの全微分可能触覚シミュレータがsim-to-realギャップを閉じながら勾配ベース軌跡最適化を可能にし、サンプリングベース・RLアプローチを凌駕する
-- **core**: FEM（Neo-Hookean）弾性体＋MLS-MPM多材料＋PBDケーブル＋ペナルティ接触＋MLP光学触覚レンダラーの全微分可能統合パイプライン
+- **core**: FEM（Neo-Hookean）弾性体＋MLS-MPM多材料＋PBDケーブル＋ペナルティ接触＋多層パーセプトロン (Multi-Layer Perceptron; MLP) 光学触覚レンダラーの全微分可能統合パイプライン
 - **diff**: 先行触覚シミュレータ（ソフトボディダイナミクスなし）に対し多様な材料タイプへのシステム全体微分可能性
 - **limit**: 逆方向微分が順方向の2倍遅い; 接触パラメータは同定値周辺のランダム化に依存
 
@@ -494,7 +494,7 @@ arXiv: 1806.07851
 Y. Zhao et al. "Sim-to-Real Gentle Manipulation of Deformable and Fragile Objects with Stress-Guided Reinforcement Learning." *arXiv*, 2025.  
 arXiv: 2510.25405  
 - **thesis**: ソフトボディシミュレーションから得られる内部応力ペナルティをRL報酬に組み込むことで専用触覚センサなしに壊れやすい変形物体の穏やかな操作ポリシーをゼロショット転移で学習できる
-- **core**: 平均応力＋上位10%応力中央値の二次変換によるストレスペナルティ報酬; カリキュラム学習（剛体代理→変形物体）＋RLPDフレームワーク
+- **core**: 平均応力＋上位10%応力中央値の二次変換によるストレスペナルティ報酬; カリキュラム学習（剛体代理→変形物体）＋RL with Prior Data (RLPD) フレームワーク
 - **diff**: 専用触覚センサや精密物体モデルを必要とする先行手法に対しビジョンのみ入力とドメインランダム化で対応
 - **limit**: シミュレーション-実世界のダイナミクス不一致; 物体多様性への拡張が今後の課題
 
@@ -514,7 +514,7 @@ arXiv: 2309.11656
 Kaifeng Zhang, Baoyu Li, Kris Hauser, Yunzhu Li. "AdaptiGraph: Material-Adaptive Graph-Based Neural Dynamics for Robotic Manipulation." *RSS 2024*.  
 arXiv: 2407.07889 | DOI: 10.15607/RSS.2024.XX.010  
 - **thesis**: 明示的な物性変数に条件付けられた単一グラフニューラルダイナミクスモデルが多様な変形材料タイプに汎化し、オンラインのfew-shot逆最適化で未知物体に適応できる
-- **core**: プロパティ条件付きGBNDモデル（材料タイプと物性値をノード特徴にエンコード）＋展開時にBO/CMA-ESによる逆最適化でオンライン物性推定
+- **core**: プロパティ条件付きグラフベース神経ダイナミクス (Graph-Based Neural Dynamics; GBND) モデル（材料タイプと物性値をノード特徴にエンコード）＋展開時にBO/CMA-ESによる逆最適化でオンライン物性推定
 - **diff**: DPI-Net・GNS（材料別モデル・オンライン適応不可）に対し明示的物性推定による単一統一モデル
 - **limit**: 4材料タイプのみで訓練; 材料あたり単一の物性
 
@@ -531,7 +531,7 @@ M. Huang et al. "SoMA: A Real-to-Sim Neural Simulator for Robotic Soft-body Mani
 arXiv: 2602.02402  
 - **thesis**: ロボット行動に条件付けられた3DGSニューラルシミュレータが事前定義された物理モデルや手動指定の材料パラメータなしに実映像から安定した長期ソフトボディ操作シミュレーションを実現できる
 - **core**: ロボットキネマティクスに固定されたGaussianダイナミクス＋力駆動Gaussian伝播（階層的NN）＋マルチ解像度訓練＋オクルージョン認識画像損失
-- **diff**: FEM/MPM/SPH（パラメータ推定困難）・神経ダイナミクスモデル（ロボット行動条件付け不可）に対し学習変形ダイナミクス＋ロボット行動条件付けを初統合
+- **diff**: FEM/MPM/平滑化粒子流体力学 (Smoothed Particle Hydrodynamics; SPH)（パラメータ推定困難）・神経ダイナミクスモデル（ロボット行動条件付け不可）に対し学習変形ダイナミクス＋ロボット行動条件付けを初統合
 - **limit**: 重度オクルージョン・訓練分布外接触で劣化; 4物体カテゴリのみで評価
 
 ---
@@ -645,3 +645,41 @@ DOI: 10.3389/frobt.2020.00082
 | Neural Dynamics | 3/3 (100%) | 0 |
 | Benchmarks | 4/4 (100%) | 0 |
 | **Total** | **39/41 (95%)** | **2** |
+
+---
+
+## 略語一覧
+
+| 略語 | 完全名 | 初出カテゴリ |
+|------|--------|-------------|
+| AD | Automatic Differentiation（自動微分） | Category A: DiffTaichi |
+| AEP | Anisotropic Elasto-Plastic（異方性弾塑性） | Category D: DiffCP |
+| BO | Bayesian Optimization（ベイズ最適化） | Foundation Building Block 3 |
+| CMA-ES | Covariance Matrix Adaptation Evolution Strategy（共分散行列適応進化戦略） | Foundation Building Block 3 |
+| DDPG | Deep Deterministic Policy Gradient（深層決定論的方策勾配法） | Foundation Building Block 4 |
+| DER | Discrete Elastic Rods（離散弾性ロッド） | Foundation Building Block 1 |
+| DLO | Deformable Linear Object（変形線形物体） | Foundation Building Block 1 |
+| EMD | Earth Mover's Distance | Foundation Building Block 1 |
+| GBND | Graph-Based Neural Dynamics（グラフベース神経ダイナミクス） | Category H: AdaptiGraph |
+| GNN | Graph Neural Network（グラフニューラルネットワーク） | Category A: DDBot |
+| IPC | Incremental Potential Contact（増分ポテンシャル接触） | Seed 1 |
+| LBS | Linear Blend Skinning（線形ブレンドスキニング） | Category C: Real2SimSoft |
+| LLM | Large Language Model（大規模言語モデル） | Category F: YoungModulus |
+| MLP | Multi-Layer Perceptron（多層パーセプトロン） | Category F: DiffTactile |
+| MLS-MPM | Moving Least Squares Material Point Method（移動最小二乗MPM） | Category A: DPSI |
+| MPC | Model Predictive Control（モデル予測制御） | Category E: Ying2024 |
+| NeRF | Neural Radiance Field（ニューラル輝度場） | Foundation Building Block 5 |
+| NN | Neural Network（ニューラルネット） | Category B: OmniPhysGS |
+| PBD | Position-Based Dynamics（位置ベースダイナミクス） | Category B: EmbodiedGS |
+| PPO | Proximal Policy Optimization（近位方策最適化） | Category E: DER |
+| RGB-D | RGB-Depth（RGB-深度） | Thesis |
+| RL | Reinforcement Learning（強化学習） | Category A: DDBot |
+| RLPD | RL with Prior Data | Category G: StressGuidedRL |
+| SAC | Soft Actor-Critic（ソフト・アクター・クリティック） | Category E: DLOFlexibility |
+| SAM | Segment Anything Model（セグメント・エニシング・モデル） | Category B: PhysGS |
+| SDS | Score Distillation Sampling（スコア蒸留サンプリング） | Category B: Physics3D |
+| SPH | Smoothed Particle Hydrodynamics（平滑化粒子流体力学） | Category H: SoMA |
+| StVK | Saint Venant-Kirchhoff（サン・ブナン・キルヒホッフ弾性） | Category A: DDBot |
+| SVD | Singular Value Decomposition（特異値分解） | Category A: PlasticineLab |
+| VLM | Vision-Language Model（視覚言語モデル） | Category B: PhysGS |
+| WS2 | What You See is What You Simulate | Foundation Building Block 2 |
